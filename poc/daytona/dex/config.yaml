@@ -1,0 +1,26 @@
+issuer: https://daytona.mobai.beauty/dex
+storage:
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
+
+web:
+  http: 0.0.0.0:5556
+  allowedOrigins: ['*']
+  allowedHeaders: ['x-requested-with']
+
+staticClients:
+  - id: daytona
+    redirectURIs:
+      - 'https://daytona.mobai.beauty'
+      - 'https://daytona.mobai.beauty/api/oauth2-redirect.html'
+    name: 'Daytona'
+    public: true
+
+enablePasswordDB: true
+staticPasswords:
+  - email: 'admin@mobai.beauty'
+    # bcrypt of "Mobai2026!" — change in production
+    hash: '$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W'
+    username: 'admin'
+    userID: '0001'

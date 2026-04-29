@@ -1,0 +1,25 @@
+FROM daytonaio/sandbox:0.5.0-slim
+
+USER root
+
+# Install system deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install ttyd static binary
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "amd64" ]; then TTYD_ARCH="x86_64"; else TTYD_ARCH="aarch64"; fi && \
+    curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${TTYD_ARCH}" \
+    -o /usr/local/bin/ttyd && \
+    chmod +x /usr/local/bin/ttyd
+
+# Install claude-code CLI globally
+RUN npm install -g @anthropic-ai/claude-code --loglevel=error
+
+# Back to the daytona user
+USER daytona
+
+RUN git --version && ttyd --version

@@ -1,0 +1,32 @@
+name: openhands
+
+services:
+  openhands:
+    image: docker.openhands.dev/openhands/openhands:1.6
+    container_name: openhands
+    restart: unless-stopped
+    environment:
+      # Agent server sandbox image
+      - AGENT_SERVER_IMAGE_REPOSITORY=ghcr.io/openhands/agent-server
+      - AGENT_SERVER_IMAGE_TAG=1.15.0-python
+      # LLM — DeepSeek via OpenAI-compatible API
+      - LLM_MODEL=openai/deepseek-v4-pro
+      - LLM_BASE_URL=https://api.deepseek.com/v1
+      - LLM_API_KEY=${LLM_API_KEY}
+      # OpenHands server identity
+      - OH_WEB_URL=https://openhands.mobai.beauty
+      - OH_PERSISTENCE_DIR=/.openhands
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - openhands_state:/.openhands
+    networks:
+      - edge
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  openhands_state:
+
+networks:
+  edge:
+    external: true

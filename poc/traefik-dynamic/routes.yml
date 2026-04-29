@@ -1,0 +1,67 @@
+http:
+  routers:
+    # Daytona Dex OIDC — must be before daytona router (longer rule = higher priority)
+    daytona-dex:
+      rule: "Host(`daytona.mobai.beauty`) && PathPrefix(`/dex`)"
+      entryPoints:
+        - websecure
+      service: dex
+      tls:
+        certResolver: le
+
+    # Daytona API + Dashboard
+    daytona:
+      rule: "Host(`daytona.mobai.beauty`)"
+      entryPoints:
+        - websecure
+      service: daytona-api
+      tls:
+        certResolver: le
+        domains:
+          - main: "mobai.beauty"
+            sans:
+              - "*.mobai.beauty"
+
+    # Daytona sandbox preview URLs — *.node.proxy.mobai.beauty
+    daytona-proxy:
+      rule: "HostRegexp(`^.+\\.node\\.proxy\\.mobai\\.beauty$`)"
+      entryPoints:
+        - websecure
+      service: daytona-proxy
+      tls:
+        certResolver: le
+        domains:
+          - main: "proxy.mobai.beauty"
+            sans:
+              - "*.proxy.mobai.beauty"
+              - "*.node.proxy.mobai.beauty"
+
+    # OpenHands UI
+    openhands:
+      rule: "Host(`openhands.mobai.beauty`)"
+      entryPoints:
+        - websecure
+      service: openhands
+      tls:
+        certResolver: le
+
+  services:
+    daytona-api:
+      loadBalancer:
+        servers:
+          - url: "http://daytona-api:3000"
+
+    dex:
+      loadBalancer:
+        servers:
+          - url: "http://daytona-dex:5556"
+
+    daytona-proxy:
+      loadBalancer:
+        servers:
+          - url: "http://daytona-proxy:4000"
+
+    openhands:
+      loadBalancer:
+        servers:
+          - url: "http://openhands:3000"
