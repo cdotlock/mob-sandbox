@@ -1,0 +1,31 @@
+name: openhands
+
+services:
+  openhands:
+    image: docker.openhands.dev/openhands/openhands:1.6
+    container_name: openhands
+    restart: unless-stopped
+    environment:
+      - AGENT_SERVER_IMAGE_REPOSITORY=ghcr.io/openhands/agent-server
+      - AGENT_SERVER_IMAGE_TAG=1.15.0-python
+      - LLM_MODEL=openai/{{.LLMModel}}
+      - LLM_BASE_URL={{.LLMBaseURL}}/v1
+      - LLM_API_KEY={{.LLMAPIKey}}
+      - OH_WEB_URL={{.OpenHandsURL}}
+      - OH_PERSISTENCE_DIR=/.openhands
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - openhands_state:/.openhands
+    networks:
+      - edge
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+{{if .OpenHandsPort}}    ports:
+      - "{{.OpenHandsPort}}:3000"
+{{end}}
+volumes:
+  openhands_state:
+
+networks:
+  edge:
+    external: true

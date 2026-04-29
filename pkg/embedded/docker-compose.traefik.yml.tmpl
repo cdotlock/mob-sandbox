@@ -1,0 +1,35 @@
+services:
+  traefik:
+    image: traefik:v3.3
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - --log.level=INFO
+      - --providers.file.directory=/config
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.email={{.ACMEEmail}}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.dnschallenge=true
+      - --certificatesresolvers.le.acme.dnschallenge.provider={{.DNSProvider}}
+      - --certificatesresolvers.le.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
+    environment:
+{{.TraefikEnvBlock}}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /etc/traefik/dynamic:/config:ro
+      - traefik_certs:/letsencrypt
+    networks:
+      - edge
+
+volumes:
+  traefik_certs:
+
+networks:
+  edge:
+    external: true

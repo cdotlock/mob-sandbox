@@ -1,0 +1,238 @@
+name: daytona
+
+services:
+  api:
+    image: daytonaio/daytona-api
+    container_name: daytona-api
+    restart: always
+    privileged: true
+    environment:
+      - OTEL_ENABLED=false
+      - DEFAULT_SNAPSHOT=mob-sandbox:latest
+      - ENCRYPTION_KEY={{.EncryptionKey}}
+      - ENCRYPTION_SALT={{.EncryptionKey}}
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USERNAME=daytona
+      - DB_PASSWORD={{.DBPassword}}
+      - DB_DATABASE=daytona
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - OIDC_CLIENT_ID=daytona
+      - OIDC_ISSUER_BASE_URL={{.APIBaseURL}}/dex
+      - PUBLIC_OIDC_DOMAIN={{.APIBaseURL}}/dex
+      - OIDC_AUDIENCE=daytona
+      - DASHBOARD_URL={{.APIBaseURL}}/dashboard
+      - DASHBOARD_BASE_API_URL={{.APIBaseURL}}
+      - TRANSIENT_REGISTRY_URL=http://registry:6000
+      - TRANSIENT_REGISTRY_ADMIN=admin
+      - TRANSIENT_REGISTRY_PASSWORD={{.RegistryPassword}}
+      - TRANSIENT_REGISTRY_PROJECT_ID=daytona
+      - INTERNAL_REGISTRY_URL=http://registry:6000
+      - INTERNAL_REGISTRY_ADMIN=admin
+      - INTERNAL_REGISTRY_PASSWORD={{.RegistryPassword}}
+      - INTERNAL_REGISTRY_PROJECT_ID=daytona
+      - SMTP_HOST=localhost
+      - SMTP_PORT=25
+      - SMTP_USER=
+      - SMTP_PASSWORD=
+      - SMTP_SECURE=
+      - SMTP_EMAIL_FROM=Daytona <no-reply@{{.Domain}}>
+      - S3_ENDPOINT=http://minio:9000
+      - S3_STS_ENDPOINT=http://minio:9000/minio/v1/assume-role
+      - S3_REGION=us-east-1
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY={{.MinioPassword}}
+      - S3_DEFAULT_BUCKET=daytona
+      - S3_ACCOUNT_ID=/
+      - S3_ROLE_NAME=/
+      - ENVIRONMENT=production
+      - PROXY_DOMAIN={{.ProxyDomain}}
+      - PROXY_PROTOCOL={{.ProxyProtocol}}
+      - PROXY_API_KEY={{.ProxyAPIKey}}
+      - PROXY_TEMPLATE_URL={{.ProxyProtocol}}://{{`{{PORT}}-{{sandboxId}}`}}.{{.ProxyDomain}}
+      - DEFAULT_RUNNER_DOMAIN=runner:3003
+      - DEFAULT_RUNNER_API_URL=http://runner:3003
+      - DEFAULT_RUNNER_PROXY_URL=http://runner:3003
+      - DEFAULT_RUNNER_API_KEY={{.RunnerAPIKey}}
+      - DEFAULT_RUNNER_CPU=4
+      - DEFAULT_RUNNER_MEMORY=8
+      - DEFAULT_RUNNER_DISK=50
+      - DEFAULT_RUNNER_NAME=default
+      - DEFAULT_REGION_ID=us
+      - DEFAULT_REGION_NAME=us
+      - DEFAULT_REGION_ENFORCE_QUOTAS=false
+      - DEFAULT_ORG_QUOTA_TOTAL_CPU_QUOTA=10000
+      - DEFAULT_ORG_QUOTA_TOTAL_MEMORY_QUOTA=10000
+      - DEFAULT_ORG_QUOTA_TOTAL_DISK_QUOTA=100000
+      - DEFAULT_ORG_QUOTA_MAX_CPU_PER_SANDBOX=100
+      - DEFAULT_ORG_QUOTA_MAX_MEMORY_PER_SANDBOX=100
+      - DEFAULT_ORG_QUOTA_MAX_DISK_PER_SANDBOX=1000
+      - DEFAULT_ORG_QUOTA_SNAPSHOT_QUOTA=1000
+      - DEFAULT_ORG_QUOTA_MAX_SNAPSHOT_SIZE=1000
+      - DEFAULT_ORG_QUOTA_VOLUME_QUOTA=10000
+      - SSH_GATEWAY_API_KEY={{.SSHGatewayAPIKey}}
+      - SSH_GATEWAY_COMMAND=ssh -p {{.SSHPort}} {{`{{TOKEN}}`}}@{{.PublicIP}}
+      - SSH_GATEWAY_PUBLIC_KEY={{.SSHGatewayPublicKeyB64}}
+      - SSH_GATEWAY_URL={{.PublicIP}}:{{.SSHPort}}
+      - SKIP_USER_EMAIL_VERIFICATION=true
+      - RUN_MIGRATIONS=true
+      - HEALTH_CHECK_API_KEY={{.EncryptionKey}}
+      - MAX_AUTO_ARCHIVE_INTERVAL=43200
+      - MAINTENANCE_MODE=false
+      - RUNNER_DECLARATIVE_BUILD_SCORE_THRESHOLD=10
+      - RUNNER_AVAILABILITY_SCORE_THRESHOLD=10
+      - RUNNER_START_SCORE_THRESHOLD=3
+    networks:
+      - edge
+      - daytona-network
+    depends_on:
+      - db
+      - runner
+      - redis
+      - dex
+      - registry
+
+  proxy:
+    image: daytonaio/daytona-proxy
+    container_name: daytona-proxy
+    restart: always
+    environment:
+      - DAYTONA_API_URL=http://api:3000/api
+      - PROXY_PORT=4000
+      - PROXY_API_KEY={{.ProxyAPIKey}}
+      - PROXY_PROTOCOL={{.ProxyProtocol}}
+      - OIDC_CLIENT_ID=daytona
+      - OIDC_CLIENT_SECRET=
+      - OIDC_DOMAIN=http://dex:5556/dex
+      - OIDC_PUBLIC_DOMAIN={{.APIBaseURL}}/dex
+      - OIDC_AUDIENCE=daytona
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - TOOLBOX_ONLY_MODE=false
+      - PREVIEW_WARNING_ENABLED=false
+    networks:
+      - edge
+      - daytona-network
+    ports:
+      - "4000:4000"
+
+  runner:
+    image: daytonaio/daytona-runner
+    container_name: daytona-runner
+    restart: always
+    privileged: true
+    environment:
+      - ENVIRONMENT=production
+      - API_PORT=3003
+      - DAYTONA_RUNNER_TOKEN={{.RunnerAPIKey}}
+      - LOG_FILE_PATH=/home/daytona/runner/runner.log
+      - RESOURCE_LIMITS_DISABLED=true
+      - AWS_ENDPOINT_URL=http://minio:9000
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY={{.MinioPassword}}
+      - AWS_DEFAULT_BUCKET=daytona
+      - DAYTONA_API_URL=http://api:3000/api
+      - RUNNER_DOMAIN=runner
+      - SSH_GATEWAY_ENABLE=true
+      - SSH_PUBLIC_KEY={{.SSHGatewayPublicKeyB64}}
+      - INTER_SANDBOX_NETWORK_ENABLED=false
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - daytona-network
+      - runner-bridge
+    ports:
+      - "3003:3003"
+
+  ssh-gateway:
+    image: daytonaio/daytona-ssh-gateway
+    container_name: daytona-ssh-gateway
+    restart: always
+    environment:
+      - API_URL=http://api:3000/api
+      - API_KEY={{.SSHGatewayAPIKey}}
+      - SSH_PRIVATE_KEY={{.SSHGatewayPrivateKeyB64}}
+      - SSH_HOST_KEY={{.SSHHostKeyB64}}
+      - SSH_GATEWAY_PORT={{.SSHPort}}
+    networks:
+      - daytona-network
+      - runner-bridge
+    ports:
+      - "{{.SSHPort}}:{{.SSHPort}}"
+
+  dex:
+    image: dexidp/dex:v2.42.0
+    container_name: daytona-dex
+    restart: always
+    volumes:
+      - {{.InstallDir}}/dex-config.yaml:/etc/dex/config.yaml:ro
+      - dex_db:/var/dex
+    entrypoint: ['sh', '-c', 'touch /var/dex/dex.db && exec dex serve /etc/dex/config.yaml']
+    networks:
+      - edge
+      - daytona-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:5556/dex/.well-known/openid-configuration"]
+
+  db:
+    image: postgres:16
+    container_name: daytona-db
+    restart: always
+    environment:
+      - POSTGRES_PASSWORD={{.DBPassword}}
+      - POSTGRES_USER=daytona
+      - POSTGRES_DB=daytona
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - daytona-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: daytona-redis
+    restart: always
+    networks:
+      - daytona-network
+
+  registry:
+    image: registry:2.8.2
+    container_name: daytona-registry
+    restart: always
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: 'true'
+      REGISTRY_HTTP_ADDR: '0.0.0.0:6000'
+    volumes:
+      - registry_data:/var/lib/registry
+    networks:
+      - daytona-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: daytona-minio
+    restart: always
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD={{.MinioPassword}}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - daytona-network
+
+volumes:
+  db_data:
+  dex_db:
+  registry_data:
+  minio_data:
+
+networks:
+  edge:
+    external: true
+  daytona-network:
+    external: true
+  runner-bridge:
+    external: true

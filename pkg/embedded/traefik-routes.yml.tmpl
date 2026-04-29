@@ -1,0 +1,63 @@
+http:
+  routers:
+    daytona-dex:
+      rule: "Host(`daytona.{{.Domain}}`) && PathPrefix(`/dex`)"
+      entryPoints:
+        - websecure
+      service: dex
+      tls:
+        certResolver: le
+
+    daytona:
+      rule: "Host(`daytona.{{.Domain}}`)"
+      entryPoints:
+        - websecure
+      service: daytona-api
+      tls:
+        certResolver: le
+        domains:
+          - main: "{{.Domain}}"
+            sans:
+              - "*.{{.Domain}}"
+
+    daytona-proxy:
+      rule: "HostRegexp(`^.+\\.node\\.proxy\\.{{.DomainEscaped}}$`)"
+      entryPoints:
+        - websecure
+      service: daytona-proxy
+      tls:
+        certResolver: le
+        domains:
+          - main: "proxy.{{.Domain}}"
+            sans:
+              - "*.proxy.{{.Domain}}"
+              - "*.node.proxy.{{.Domain}}"
+
+    openhands:
+      rule: "Host(`openhands.{{.Domain}}`)"
+      entryPoints:
+        - websecure
+      service: openhands
+      tls:
+        certResolver: le
+
+  services:
+    daytona-api:
+      loadBalancer:
+        servers:
+          - url: "http://daytona-api:3000"
+
+    dex:
+      loadBalancer:
+        servers:
+          - url: "http://daytona-dex:5556"
+
+    daytona-proxy:
+      loadBalancer:
+        servers:
+          - url: "http://daytona-proxy:4000"
+
+    openhands:
+      loadBalancer:
+        servers:
+          - url: "http://openhands:3000"

@@ -1,0 +1,25 @@
+issuer: {{.APIBaseURL}}/dex
+storage:
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
+
+web:
+  http: 0.0.0.0:5556
+  allowedOrigins: ['*']
+  allowedHeaders: ['x-requested-with']
+
+staticClients:
+  - id: daytona
+    redirectURIs:
+      - '{{.APIBaseURL}}'
+      - '{{.APIBaseURL}}/api/oauth2-redirect.html'
+    name: 'Daytona'
+    public: true
+
+enablePasswordDB: true
+staticPasswords:
+  - email: 'admin@{{.Domain}}'
+    hash: '{{.AdminPasswordHash}}'
+    username: 'admin'
+    userID: '0001'
