@@ -21,7 +21,7 @@ func main() {
 		Version: config.Version,
 	}
 
-	root.AddCommand(initCmd(), statusCmd(), keyCmd(), daemonCmd())
+	root.AddCommand(initCmd(), statusCmd(), keyCmd(), operatorCmd(), daemonCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
