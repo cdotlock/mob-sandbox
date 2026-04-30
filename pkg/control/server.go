@@ -143,8 +143,11 @@ func (s *Server) addRoute(req ExposeRequest) error {
 		"tls":         map[string]any{"certResolver": "le"},
 	}
 
-	// Route to the sandbox via the Daytona proxy
-	targetURL := fmt.Sprintf("http://%s-sandbox-%s:%d", req.Port, req.SandboxID, req.Port)
+	// Route to the sandbox via Daytona's wildcard preview URL.
+	// *.node.proxy.<domain> resolves back to this VM; Traefik then matches
+	// the host on its daytona-proxy router and forwards to the sandbox.
+	// (Matches the convention in pkg/daytona/client.go BuildPreviewURL.)
+	targetURL := fmt.Sprintf("https://%d-%s.node.proxy.%s", req.Port, req.SandboxID, s.domain)
 	services[serviceName] = map[string]any{
 		"loadBalancer": map[string]any{
 			"servers": []map[string]string{{"url": targetURL}},
