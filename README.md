@@ -24,15 +24,19 @@
 ```bash
 mob-server init --domain example.com --dns-provider porkbun --dns-token xxx --llm-key sk-xxx
 mob-server status
-mob-server key create alice
+mob-server key create alice                       # Daytona API key
 mob-server key list
 mob-server key revoke alice
+mob-server operator add alice -f alice.pub        # SSH operator (root 登录)
+mob-server operator list
+mob-server operator revoke alice
+mob-server operator worker-config                 # 输出 CF Worker 用的 JSON
 mob-server daemon
 ```
 
 ### mob — 客户端 CLI
 
-运行在开发者笔记本上，一键开沙盒。
+运行在开发者笔记本上，一键开沙盒 + VPS 开关机。
 
 ```bash
 mob init                          # 连接服务器
@@ -44,6 +48,12 @@ mob forward <id> <port>           # SSH 隧道转发到 localhost
 mob url <id> <port>               # 预览 URL（域名模式）
 mob expose <id> <port> [name]     # 永久子域名路由（域名模式）
 mob openhands                     # 打开 OpenHands 浏览器
+
+mob power init                    # 配置 Cloudflare Worker URL + operator 名
+mob power start                   # 开机（Vultr API 通过 Worker 调用）
+mob power stop                    # 关机
+mob power reboot                  # 重启
+mob power status                  # 查看 VPS 状态
 ```
 
 ## 两种模式
@@ -108,18 +118,39 @@ mob-sandbox/
 │   ├── dns/            DNS provider（cloudflare/porkbun/manual）
 │   ├── deploy/         20 步 init 部署流程
 │   ├── guardian/       daemon 保活/修复/清理
-│   └── control/        HTTP 控制 API（expose 路由管理）
+│   ├── control/        HTTP 控制 API（expose 路由管理）
+│   └── power/          客户端 Vultr 开关机（SSH 签名 → CF Worker）
+├── infra/
+│   └── power-worker/   Cloudflare Worker：Vultr 开关机代理（SSH 验签）
 ├── poc/                PoC bash 脚本（deploy.sh 等）
 ├── docs/               设计文档、实现报告、运维手册
 ├── Makefile
 └── install.sh
 ```
 
+## 多 operator 协作
+
+任意一个新加入的 operator（人 / AI agent）都可以拿到 SSH + 开关机权限，**无需共享私钥或 Vultr key**。流程：
+
+1. operator 本机 `ssh-keygen -t ed25519` 生成自己的 keypair
+2. 把 pubkey 给管理员
+3. 管理员 SSH 到服务器跑 `mob-server operator add <name> -f <name>.pub`
+4. 管理员把命令打印的 `{"name":..., "pubkey_b64":...}` 加到 `infra/power-worker/wrangler.toml` 的 `AUTHORIZED_PUBKEYS` 数组里
+5. 管理员 `cd infra/power-worker && npx wrangler deploy` 重新部署 Worker
+6. operator 跑 `mob power init` 填 Worker URL 和自己的 name
+7. 测试：`mob power status` ✓
+
+撤销：管理员 `mob-server operator revoke <name>`，从 Worker 配置里删掉对应条目，重新部署。
+
+完整 onboarding 步骤见 [docs/operator-onboarding.md](docs/operator-onboarding.md)。
+
 ## 文档
 
+- [Operator 接入流程](docs/operator-onboarding.md)
 - [CLI 设计 Spec](docs/mob-cli-design-spec.md)
 - [实现报告（踩坑全记录）](docs/mob-sandbox-implementation-report.md)
 - [Vultr + Porkbun 运维手册](docs/ops-vultr-porkbun-runbook.md)
+- [Cloudflare Worker（开关机代理）](infra/power-worker/README.md)
 - [测试报告](docs/mob-sandbox-platform-test-report-2026-04-29.md)
 
 ## 依赖
