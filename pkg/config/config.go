@@ -48,6 +48,11 @@ type ClientConfig struct {
 	OpenHands string `yaml:"openhands"`
 	Control  string `yaml:"control"`
 	Mode     string `yaml:"mode"`
+
+	// Power control via Cloudflare Worker (optional)
+	PowerWorkerURL string `yaml:"power_worker_url,omitempty"`
+	OperatorName   string `yaml:"operator_name,omitempty"`
+	SSHKeyPath     string `yaml:"ssh_key_path,omitempty"`
 }
 
 func DefaultServerConfig() *ServerConfig {

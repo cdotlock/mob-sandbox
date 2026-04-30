@@ -36,6 +36,7 @@ func main() {
 		urlCmd(),
 		exposeCmd(),
 		openhandsCmd(),
+		powerCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
