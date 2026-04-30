@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -29,8 +31,9 @@ func Call(workerURL, operator, keyPath, action string) (string, error) {
 		return "", fmt.Errorf("operator name not configured — run 'mob power init'")
 	}
 	if keyPath == "" {
-		keyPath = os.ExpandEnv("$HOME/.ssh/id_ed25519")
+		keyPath = "~/.ssh/id_ed25519"
 	}
+	keyPath = expandHome(keyPath)
 
 	keyData, err := os.ReadFile(keyPath)
 	if err != nil {
@@ -82,6 +85,16 @@ func Call(workerURL, operator, keyPath, action string) (string, error) {
 		return "", fmt.Errorf("worker returned %d: %s", resp.StatusCode, string(out))
 	}
 	return string(out), nil
+}
+
+func expandHome(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
 }
 
 func edPrivKey(parsed any) (ed25519.PrivateKey, error) {
