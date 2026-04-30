@@ -6,7 +6,7 @@ compatibility_date = "2024-09-23"
 # --- Public variables (set these before deploying) ---
 [vars]
 # Vultr instance UUID — the VM you want to power-control.
-VM_ID = "REPLACE_WITH_VULTR_INSTANCE_UUID"
+VM_ID = "bbea8db7-4e34-4054-b6c2-6717eb3de436"
 
 # JSON array of authorized operators. Each entry needs:
 #   name        — operator label (matches `mob-server operator add <name>`)
@@ -14,9 +14,10 @@ VM_ID = "REPLACE_WITH_VULTR_INSTANCE_UUID"
 #                 (printed by `mob-server operator add` after registration)
 #
 # To regenerate this list from the server:
-#   mob-server operator worker-config
+#   ssh root@<vm-ip> mob-server operator worker-config
 AUTHORIZED_PUBKEYS = '''[
-  {"name":"clock","pubkey_b64":"REPLACE_WITH_PUBKEY_B64"}
+  {"name":"clock","pubkey_b64":"XhTuxba4LPDOrD1VYzG/3F9vrOVN4yZz+IFb3SQNvMI="},
+  {"name":"kaito","pubkey_b64":"XLqPoVyLeJ/gOOBWTSr9hGlDbGv5k+E9/Y+jlGj4VzQ="}
 ]'''
 
 # Optional: max clock skew (seconds) between operator and Worker. Default 300.
