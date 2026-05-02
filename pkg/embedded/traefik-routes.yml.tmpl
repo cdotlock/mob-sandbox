@@ -15,23 +15,14 @@ http:
       service: daytona-api
       tls:
         certResolver: le
-        domains:
-          - main: "{{.Domain}}"
-            sans:
-              - "*.{{.Domain}}"
 
     daytona-proxy:
-      rule: "HostRegexp(`^.+\\.node\\.proxy\\.{{.DomainEscaped}}$`)"
+      rule: 'HostRegexp(`^.+\\.node\\.proxy\\.{{.DomainEscaped}}$`)'
       entryPoints:
         - websecure
       service: daytona-proxy
       tls:
         certResolver: le
-        domains:
-          - main: "proxy.{{.Domain}}"
-            sans:
-              - "*.proxy.{{.Domain}}"
-              - "*.node.proxy.{{.Domain}}"
 
     openhands:
       rule: "Host(`openhands.{{.Domain}}`)"

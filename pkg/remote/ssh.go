@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -77,7 +78,7 @@ func (c *SSHClient) Upload(content []byte, remotePath string) error {
 	go func() {
 		w, _ := sess.StdinPipe()
 		defer w.Close()
-		fmt.Fprintf(w, "C0644 %d %s\n", len(content), remotePath)
+		fmt.Fprintf(w, "C0644 %d %s\n", len(content), filepath.Base(remotePath))
 		w.Write(content)
 		fmt.Fprint(w, "\x00")
 	}()

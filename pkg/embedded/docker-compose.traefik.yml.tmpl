@@ -13,9 +13,8 @@ services:
       - --entrypoints.websecure.address=:443
       - --certificatesresolvers.le.acme.email={{.ACMEEmail}}
       - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.le.acme.dnschallenge=true
-      - --certificatesresolvers.le.acme.dnschallenge.provider={{.DNSProvider}}
-      - --certificatesresolvers.le.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
     environment:
 {{.TraefikEnvBlock}}
     ports:

@@ -62,6 +62,33 @@ BEGIN
     '{write:sandboxes,delete:sandboxes,write:snapshots,delete:snapshots,read:volumes,write:volumes,delete:volumes,read:runners,write:runners,read:audit_logs}'::api_key_permissions_enum[]
   )
   ON CONFLICT ("keyHash") DO NOTHING;
+
+  UPDATE organization
+  SET
+    max_cpu_per_sandbox = 2,
+    max_memory_per_sandbox = 4,
+    max_disk_per_sandbox = 20,
+    volume_quota = 100,
+    "defaultRegionId" = COALESCE("defaultRegionId", 'us'),
+    "updatedAt" = NOW()
+  WHERE id = org_id;
+
+  INSERT INTO region_quota (
+    "organizationId", "regionId",
+    total_cpu_quota, total_memory_quota, total_disk_quota,
+    max_cpu_per_sandbox, max_memory_per_sandbox, max_disk_per_sandbox,
+    max_disk_per_non_ephemeral_sandbox
+  )
+  VALUES (org_id, 'us', 4, 7, 100, 2, 4, 20, 20)
+  ON CONFLICT ("organizationId", "regionId") DO UPDATE SET
+    total_cpu_quota = EXCLUDED.total_cpu_quota,
+    total_memory_quota = EXCLUDED.total_memory_quota,
+    total_disk_quota = EXCLUDED.total_disk_quota,
+    max_cpu_per_sandbox = EXCLUDED.max_cpu_per_sandbox,
+    max_memory_per_sandbox = EXCLUDED.max_memory_per_sandbox,
+    max_disk_per_sandbox = EXCLUDED.max_disk_per_sandbox,
+    max_disk_per_non_ephemeral_sandbox = EXCLUDED.max_disk_per_non_ephemeral_sandbox,
+    "updatedAt" = NOW();
 END
 $$;
 SQL
@@ -82,7 +109,12 @@ func insertAPIKeyLocal(name, key string) error {
 		`INSERT INTO api_key ("keyHash", "keyPrefix", "keySuffix", name, "createdAt", "organizationId", "userId", permissions) `+
 		`VALUES ('%s', '%s', '%s', '%s', NOW(), org_id, user_id, `+
 		`'{write:sandboxes,delete:sandboxes,write:snapshots,delete:snapshots,read:volumes,write:volumes,delete:volumes,read:runners,write:runners,read:audit_logs}'::api_key_permissions_enum[]) `+
-		`ON CONFLICT ("keyHash") DO NOTHING; END $$;`,
+		`ON CONFLICT ("keyHash") DO NOTHING; `+
+		`UPDATE organization SET max_cpu_per_sandbox = 2, max_memory_per_sandbox = 4, max_disk_per_sandbox = 20, volume_quota = 100, "defaultRegionId" = COALESCE("defaultRegionId", 'us'), "updatedAt" = NOW() WHERE id = org_id; `+
+		`INSERT INTO region_quota ("organizationId", "regionId", total_cpu_quota, total_memory_quota, total_disk_quota, max_cpu_per_sandbox, max_memory_per_sandbox, max_disk_per_sandbox, max_disk_per_non_ephemeral_sandbox) `+
+		`VALUES (org_id, 'us', 4, 7, 100, 2, 4, 20, 20) `+
+		`ON CONFLICT ("organizationId", "regionId") DO UPDATE SET total_cpu_quota = EXCLUDED.total_cpu_quota, total_memory_quota = EXCLUDED.total_memory_quota, total_disk_quota = EXCLUDED.total_disk_quota, max_cpu_per_sandbox = EXCLUDED.max_cpu_per_sandbox, max_memory_per_sandbox = EXCLUDED.max_memory_per_sandbox, max_disk_per_sandbox = EXCLUDED.max_disk_per_sandbox, max_disk_per_non_ephemeral_sandbox = EXCLUDED.max_disk_per_non_ephemeral_sandbox, "updatedAt" = NOW(); `+
+		`END $$;`,
 		keyHash, keyPrefix, keySuffix, name)
 
 	// Write SQL to temp file to avoid shell escaping issues

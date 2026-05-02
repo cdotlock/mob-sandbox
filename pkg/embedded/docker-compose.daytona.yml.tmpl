@@ -21,7 +21,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - OIDC_CLIENT_ID=daytona
-      - OIDC_ISSUER_BASE_URL={{.APIBaseURL}}/dex
+      - OIDC_ISSUER_BASE_URL=http://dex:5556/dex
       - PUBLIC_OIDC_DOMAIN={{.APIBaseURL}}/dex
       - OIDC_AUDIENCE=daytona
       - DASHBOARD_URL={{.APIBaseURL}}/dashboard

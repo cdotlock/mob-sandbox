@@ -101,8 +101,15 @@ func (c *Client) BuildPreviewURL(id string, port int, domain string) string {
 }
 
 func (c *Client) CreateSnapshot(imageName string) (*Snapshot, error) {
-	body := map[string]any{"imageName": imageName, "autoStart": true}
-	data, err := c.post("/api/snapshot", body)
+	body := map[string]any{
+		"name":       "mob-sandbox:1.0",
+		"imageName":  imageName,
+		"entrypoint": []string{"sleep", "infinity"},
+		"cpu":        1,
+		"memory":     2,
+		"disk":       10,
+	}
+	data, err := c.post("/api/snapshots", body)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +118,7 @@ func (c *Client) CreateSnapshot(imageName string) (*Snapshot, error) {
 }
 
 func (c *Client) GetSnapshot(id string) (*Snapshot, error) {
-	data, err := c.get("/api/snapshot/" + id)
+	data, err := c.get("/api/snapshots/" + id)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +127,7 @@ func (c *Client) GetSnapshot(id string) (*Snapshot, error) {
 }
 
 func (c *Client) ListSnapshots() ([]Snapshot, error) {
-	data, err := c.get("/api/snapshot")
+	data, err := c.get("/api/snapshots")
 	if err != nil {
 		return nil, err
 	}

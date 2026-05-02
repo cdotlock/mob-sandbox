@@ -430,6 +430,33 @@ BEGIN
     '{write:sandboxes,delete:sandboxes,write:snapshots,delete:snapshots,read:volumes,write:volumes,delete:volumes,read:runners,write:runners,read:audit_logs}'::api_key_permissions_enum[]
   )
   ON CONFLICT ("keyHash") DO NOTHING;
+
+  UPDATE organization
+  SET
+    max_cpu_per_sandbox = 2,
+    max_memory_per_sandbox = 4,
+    max_disk_per_sandbox = 20,
+    volume_quota = 100,
+    "defaultRegionId" = COALESCE("defaultRegionId", 'us'),
+    "updatedAt" = NOW()
+  WHERE id = org_id;
+
+  INSERT INTO region_quota (
+    "organizationId", "regionId",
+    total_cpu_quota, total_memory_quota, total_disk_quota,
+    max_cpu_per_sandbox, max_memory_per_sandbox, max_disk_per_sandbox,
+    max_disk_per_non_ephemeral_sandbox
+  )
+  VALUES (org_id, 'us', 4, 7, 100, 2, 4, 20, 20)
+  ON CONFLICT ("organizationId", "regionId") DO UPDATE SET
+    total_cpu_quota = EXCLUDED.total_cpu_quota,
+    total_memory_quota = EXCLUDED.total_memory_quota,
+    total_disk_quota = EXCLUDED.total_disk_quota,
+    max_cpu_per_sandbox = EXCLUDED.max_cpu_per_sandbox,
+    max_memory_per_sandbox = EXCLUDED.max_memory_per_sandbox,
+    max_disk_per_sandbox = EXCLUDED.max_disk_per_sandbox,
+    max_disk_per_non_ephemeral_sandbox = EXCLUDED.max_disk_per_non_ephemeral_sandbox,
+    "updatedAt" = NOW();
 END
 $$;
 SQL
@@ -460,15 +487,15 @@ func (d *Deployer) step18RegisterSnapshot() error {
 SNAP=$(curl -sf -X POST \
   -H "Authorization: Bearer %s" \
   -H "Content-Type: application/json" \
-  -d '{"imageName":"registry:6000/mob-sandbox:1.0","autoStart":true}' \
-  %s/api/snapshot 2>&1)
+  -d '{"name":"mob-sandbox:1.0","imageName":"registry:6000/mob-sandbox:1.0","entrypoint":["sleep","infinity"],"cpu":1,"memory":2,"disk":10}' \
+  %s/api/snapshots 2>&1)
 echo "Snapshot: $SNAP"
 
 SNAP_ID=$(echo "$SNAP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)
 if [ -n "$SNAP_ID" ]; then
   for i in $(seq 1 60); do
     STATE=$(curl -sf -H "Authorization: Bearer %s" \
-      %s/api/snapshot/$SNAP_ID \
+      %s/api/snapshots/$SNAP_ID \
       | python3 -c 'import sys,json; print(json.load(sys.stdin).get("state",""))' 2>/dev/null || echo "unknown")
     echo "  snapshot state: $STATE"
     [ "$STATE" = "active" ] && break
