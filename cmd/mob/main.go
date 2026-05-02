@@ -74,6 +74,37 @@ func sandboxEnv(cfg *config.ClientConfig) map[string]string {
 	return env
 }
 
+func isSandboxReady(state string) bool {
+	return state == "started" || state == "running"
+}
+
+func waitSandboxReady(client *daytona.Client, sandboxID string) error {
+	for i := 0; i < 60; i++ {
+		s, err := client.GetSandbox(sandboxID)
+		if err == nil && isSandboxReady(s.State) {
+			return nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("sandbox %s did not become ready", sandboxID)
+}
+
+func ensureSandboxReady(client *daytona.Client, sandboxID string) error {
+	s, err := client.GetSandbox(sandboxID)
+	if err != nil {
+		return err
+	}
+	if isSandboxReady(s.State) {
+		return nil
+	}
+
+	ui.Info("Starting sandbox %s (%s)...", sandboxID, s.State)
+	if err := client.StartSandbox(sandboxID); err != nil {
+		return fmt.Errorf("start sandbox: %w", err)
+	}
+	return waitSandboxReady(client, sandboxID)
+}
+
 func initCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
@@ -168,13 +199,8 @@ func createCmd() *cobra.Command {
 				return fmt.Errorf("create sandbox: %w", err)
 			}
 
-			// Wait for running state
-			for i := 0; i < 30; i++ {
-				s, err := client.GetSandbox(sb.ID)
-				if err == nil && (s.State == "started" || s.State == "running") {
-					break
-				}
-				time.Sleep(2 * time.Second)
+			if err := waitSandboxReady(client, sb.ID); err != nil {
+				return err
 			}
 
 			ui.Ok("%s ready (%s)", sb.ID, time.Since(start).Round(time.Second))
@@ -198,6 +224,9 @@ func sshCmd() *cobra.Command {
 			var sandboxID string
 			if len(args) > 0 {
 				sandboxID = args[0]
+				if err := ensureSandboxReady(client, sandboxID); err != nil {
+					return err
+				}
 			} else {
 				ui.Info("Creating sandbox...")
 				start := time.Now()
@@ -206,12 +235,8 @@ func sshCmd() *cobra.Command {
 					return fmt.Errorf("create: %w", err)
 				}
 				sandboxID = sb.ID
-				for i := 0; i < 30; i++ {
-					s, _ := client.GetSandbox(sandboxID)
-					if s != nil && (s.State == "started" || s.State == "running") {
-						break
-					}
-					time.Sleep(2 * time.Second)
+				if err := waitSandboxReady(client, sandboxID); err != nil {
+					return err
 				}
 				ui.Ok("%s ready (%s)", sandboxID, time.Since(start).Round(time.Second))
 			}
@@ -242,6 +267,9 @@ func claudeCmd() *cobra.Command {
 			var sandboxID string
 			if len(args) > 0 {
 				sandboxID = args[0]
+				if err := ensureSandboxReady(client, sandboxID); err != nil {
+					return err
+				}
 			} else {
 				ui.Info("Creating sandbox...")
 				start := time.Now()
@@ -250,12 +278,8 @@ func claudeCmd() *cobra.Command {
 					return fmt.Errorf("create: %w", err)
 				}
 				sandboxID = sb.ID
-				for i := 0; i < 30; i++ {
-					s, _ := client.GetSandbox(sandboxID)
-					if s != nil && (s.State == "started" || s.State == "running") {
-						break
-					}
-					time.Sleep(2 * time.Second)
+				if err := waitSandboxReady(client, sandboxID); err != nil {
+					return err
 				}
 				ui.Ok("%s ready (%s)", sandboxID, time.Since(start).Round(time.Second))
 			}
@@ -335,6 +359,10 @@ func forwardCmd() *cobra.Command {
 			remotePort, err := strconv.Atoi(args[1])
 			if err != nil {
 				return fmt.Errorf("invalid port: %s", args[1])
+			}
+
+			if err := ensureSandboxReady(client, args[0]); err != nil {
+				return err
 			}
 
 			access, err := client.GetSSHAccess(args[0])

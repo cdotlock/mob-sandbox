@@ -94,6 +94,11 @@ func (c *Client) DeleteSandbox(id string) error {
 	return c.delete("/api/sandbox/" + id)
 }
 
+func (c *Client) StartSandbox(id string) error {
+	_, err := c.post("/api/sandbox/"+id+"/start", nil)
+	return err
+}
+
 func (c *Client) GetSSHAccess(id string) (*SSHAccess, error) {
 	data, err := c.post("/api/sandbox/"+id+"/ssh-access", nil)
 	if err != nil {
