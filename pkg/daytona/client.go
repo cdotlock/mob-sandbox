@@ -56,7 +56,14 @@ func (c *Client) GetInfo() (map[string]any, error) {
 }
 
 func (c *Client) CreateSandbox(snapshotID string) (*Sandbox, error) {
-	body := map[string]string{"snapshot": snapshotID}
+	return c.CreateSandboxWithEnv(snapshotID, nil)
+}
+
+func (c *Client) CreateSandboxWithEnv(snapshotID string, env map[string]string) (*Sandbox, error) {
+	body := map[string]any{"snapshot": snapshotID}
+	if len(env) > 0 {
+		body["env"] = env
+	}
 	data, err := c.post("/api/sandbox", body)
 	if err != nil {
 		return nil, err

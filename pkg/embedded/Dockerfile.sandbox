@@ -14,7 +14,11 @@ RUN ARCH=$(dpkg --print-architecture) && \
     -o /usr/local/bin/ttyd && \
     chmod +x /usr/local/bin/ttyd
 
-RUN npm install -g @anthropic-ai/claude-code --loglevel=error
+RUN npm install -g @anthropic-ai/claude-code --loglevel=error && \
+    ln -sf /usr/local/nvm/versions/node/v22.14.0/bin/node /usr/local/bin/node && \
+    ln -sf /usr/local/nvm/versions/node/v22.14.0/bin/npm /usr/local/bin/npm && \
+    ln -sf /usr/local/nvm/versions/node/v22.14.0/bin/npx /usr/local/bin/npx && \
+    ln -sf /usr/local/nvm/versions/node/v22.14.0/bin/claude /usr/local/bin/claude
 
 USER daytona
 

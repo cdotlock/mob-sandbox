@@ -49,6 +49,9 @@ type ClientConfig struct {
 	Control  string `yaml:"control"`
 	Mode     string `yaml:"mode"`
 
+	// Environment injected into every new sandbox created by this client.
+	ClaudeCodeEnv map[string]string `yaml:"claude_code_env,omitempty"`
+
 	// Power control via Cloudflare Worker (optional)
 	PowerWorkerURL string `yaml:"power_worker_url,omitempty"`
 	OperatorName   string `yaml:"operator_name,omitempty"`

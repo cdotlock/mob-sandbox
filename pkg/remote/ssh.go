@@ -6,11 +6,14 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/term"
 )
 
 type SSHClient struct {
@@ -28,8 +31,8 @@ func NewSSHClient(host string, port int, user, keyPath string) (*SSHClient, erro
 	}
 
 	config := &ssh.ClientConfig{
-		User: user,
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		User:            user,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Config: ssh.Config{
 			KeyExchanges: []string{"curve25519-sha256"},
@@ -92,9 +95,17 @@ func (c *SSHClient) Close() error {
 }
 
 func ConnectSandbox(host string, port int, token string) error {
+	return connectSandbox(host, port, token, "")
+}
+
+func RunSandboxCommand(host string, port int, token string, command string) error {
+	return connectSandbox(host, port, token, command)
+}
+
+func connectSandbox(host string, port int, token string, command string) error {
 	config := &ssh.ClientConfig{
-		User: token,
-		Auth: []ssh.AuthMethod{ssh.Password("")},
+		User:            token,
+		Auth:            []ssh.AuthMethod{ssh.Password("")},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Config: ssh.Config{
 			KeyExchanges: []string{"curve25519-sha256"},
@@ -115,28 +126,87 @@ func ConnectSandbox(host string, port int, token string) error {
 	}
 	defer sess.Close()
 
-	sess.Stdin = os.Stdin
+	stdinFD := int(os.Stdin.Fd())
+	stdoutFD := int(os.Stdout.Fd())
+	if term.IsTerminal(stdinFD) {
+		state, err := term.MakeRaw(stdinFD)
+		if err != nil {
+			return fmt.Errorf("raw terminal: %w", err)
+		}
+		defer term.Restore(stdinFD, state)
+	}
+
 	sess.Stdout = os.Stdout
 	sess.Stderr = os.Stderr
+	if command == "" {
+		sess.Stdin = os.Stdin
+	} else {
+		stdin, err := sess.StdinPipe()
+		if err != nil {
+			return fmt.Errorf("stdin pipe: %w", err)
+		}
+		go func() {
+			defer stdin.Close()
+			fmt.Fprintln(stdin, command)
+			_, _ = io.Copy(stdin, os.Stdin)
+		}()
+	}
 
+	width, height := terminalSize(stdoutFD)
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          1,
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
 	}
-	if err := sess.RequestPty("xterm-256color", 40, 120, modes); err != nil {
+	if err := sess.RequestPty("xterm-256color", height, width, modes); err != nil {
 		return fmt.Errorf("request pty: %w", err)
 	}
+	stopResize := watchTerminalResize(sess, stdoutFD)
+	defer stopResize()
+
 	if err := sess.Shell(); err != nil {
 		return fmt.Errorf("shell: %w", err)
 	}
 	return sess.Wait()
 }
 
+func terminalSize(fd int) (int, int) {
+	if term.IsTerminal(fd) {
+		width, height, err := term.GetSize(fd)
+		if err == nil && width > 0 && height > 0 {
+			return width, height
+		}
+	}
+	return 120, 40
+}
+
+func watchTerminalResize(sess *ssh.Session, fd int) func() {
+	signals := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	signal.Notify(signals, syscall.SIGWINCH)
+
+	go func() {
+		defer signal.Stop(signals)
+		for {
+			select {
+			case <-done:
+				return
+			case <-signals:
+				width, height := terminalSize(fd)
+				_ = sess.WindowChange(height, width)
+			}
+		}
+	}()
+
+	return func() {
+		close(done)
+	}
+}
+
 func PortForward(ctx context.Context, host string, port int, token string, remotePort int) (int, error) {
 	config := &ssh.ClientConfig{
-		User: token,
-		Auth: []ssh.AuthMethod{ssh.Password("")},
+		User:            token,
+		Auth:            []ssh.AuthMethod{ssh.Password("")},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Config: ssh.Config{
 			KeyExchanges: []string{"curve25519-sha256"},

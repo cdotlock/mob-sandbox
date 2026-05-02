@@ -30,6 +30,7 @@ func main() {
 		initCmd(),
 		createCmd(),
 		sshCmd(),
+		claudeCmd(),
 		psCmd(),
 		rmCmd(),
 		forwardCmd(),
@@ -54,6 +55,23 @@ func loadCfg() (*config.ClientConfig, error) {
 
 func newClient(cfg *config.ClientConfig) *daytona.Client {
 	return daytona.NewClient(cfg.Server, cfg.APIKey)
+}
+
+func sandboxEnv(cfg *config.ClientConfig) map[string]string {
+	env := map[string]string{
+		"PATH":         "/usr/local/nvm/versions/node/v22.14.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games",
+		"NVM_DIR":      "/usr/local/nvm",
+		"NODE_VERSION": "22.14.0",
+		"NODE_PATH":    "/usr/local/nvm/v22.14.0/lib/node_modules",
+		"LANG":         "C.UTF-8",
+		"LC_ALL":       "C.UTF-8",
+	}
+	for k, v := range cfg.ClaudeCodeEnv {
+		if v != "" {
+			env[k] = v
+		}
+	}
+	return env
 }
 
 func initCmd() *cobra.Command {
@@ -99,11 +117,11 @@ func initCmd() *cobra.Command {
 			}
 
 			cfg := &config.ClientConfig{
-				Server:   server,
-				APIKey:   apiKey,
-				SSHHost:  host,
-				SSHPort:  2222,
-				Mode:     mode,
+				Server:  server,
+				APIKey:  apiKey,
+				SSHHost: host,
+				SSHPort: 2222,
+				Mode:    mode,
 			}
 
 			// Try to detect OpenHands
@@ -145,7 +163,7 @@ func createCmd() *cobra.Command {
 			ui.Info("Creating sandbox...")
 			start := time.Now()
 
-			sb, err := client.CreateSandbox("mob-sandbox:1.0")
+			sb, err := client.CreateSandboxWithEnv("mob-sandbox:1.0", sandboxEnv(cfg))
 			if err != nil {
 				return fmt.Errorf("create sandbox: %w", err)
 			}
@@ -153,7 +171,7 @@ func createCmd() *cobra.Command {
 			// Wait for running state
 			for i := 0; i < 30; i++ {
 				s, err := client.GetSandbox(sb.ID)
-				if err == nil && s.State == "started" || s.State == "running" {
+				if err == nil && (s.State == "started" || s.State == "running") {
 					break
 				}
 				time.Sleep(2 * time.Second)
@@ -183,14 +201,14 @@ func sshCmd() *cobra.Command {
 			} else {
 				ui.Info("Creating sandbox...")
 				start := time.Now()
-				sb, err := client.CreateSandbox("mob-sandbox:1.0")
+				sb, err := client.CreateSandboxWithEnv("mob-sandbox:1.0", sandboxEnv(cfg))
 				if err != nil {
 					return fmt.Errorf("create: %w", err)
 				}
 				sandboxID = sb.ID
 				for i := 0; i < 30; i++ {
 					s, _ := client.GetSandbox(sandboxID)
-					if s != nil && s.State == "started" || s.State == "running" {
+					if s != nil && (s.State == "started" || s.State == "running") {
 						break
 					}
 					time.Sleep(2 * time.Second)
@@ -203,7 +221,52 @@ func sshCmd() *cobra.Command {
 				return fmt.Errorf("ssh access: %w", err)
 			}
 
+			ui.Ok("Remote sandbox %s", sandboxID)
 			return remote.ConnectSandbox(cfg.SSHHost, cfg.SSHPort, access.Token)
+		},
+	}
+}
+
+func claudeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "claude [id]",
+		Short: "Run Claude Code inside a remote sandbox",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadCfg()
+			if err != nil {
+				return err
+			}
+			client := newClient(cfg)
+
+			var sandboxID string
+			if len(args) > 0 {
+				sandboxID = args[0]
+			} else {
+				ui.Info("Creating sandbox...")
+				start := time.Now()
+				sb, err := client.CreateSandboxWithEnv("mob-sandbox:1.0", sandboxEnv(cfg))
+				if err != nil {
+					return fmt.Errorf("create: %w", err)
+				}
+				sandboxID = sb.ID
+				for i := 0; i < 30; i++ {
+					s, _ := client.GetSandbox(sandboxID)
+					if s != nil && (s.State == "started" || s.State == "running") {
+						break
+					}
+					time.Sleep(2 * time.Second)
+				}
+				ui.Ok("%s ready (%s)", sandboxID, time.Since(start).Round(time.Second))
+			}
+
+			access, err := client.GetSSHAccess(sandboxID)
+			if err != nil {
+				return fmt.Errorf("ssh access: %w", err)
+			}
+
+			ui.Ok("Running Claude Code in remote sandbox %s", sandboxID)
+			return remote.RunSandboxCommand(cfg.SSHHost, cfg.SSHPort, access.Token, "cd ~ && exec /usr/local/bin/claude")
 		},
 	}
 }
