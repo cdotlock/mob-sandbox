@@ -110,7 +110,7 @@ daytona_api_key: "poc-..."
 ports:
   api: 3986
   ssh: 2222
-  openhands: 3100
+  openhands: 3100                   # IP mode starts here, then auto +1 on conflict
   proxy: 4000
   control: 9876                     # mob-server 控制 API 端口
 llm:
@@ -199,7 +199,7 @@ $ mob init
 探测逻辑：
 1. `GET {server}/api/health` 验证连通 + 取版本
 2. 探测 SSH gateway 端口（默认 2222）
-3. 探测 OpenHands 端口（默认 3100，可能 12000）
+3. 探测 OpenHands 端口（从 3100 开始自动 +1，写入实际响应端口）
 4. `GET {server}/api/info` 探测 mode（ip / domain）
 
 ### mob ssh

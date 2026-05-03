@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -209,7 +211,7 @@ func runInitInteractive(reader *bufio.Reader) error {
 		cfg.OpenHands = fmt.Sprintf("https://openhands.%s", domain)
 		cfg.Control = fmt.Sprintf("https://control.%s", domain)
 	} else {
-		cfg.OpenHands = fmt.Sprintf("http://%s:%d", host, config.DefaultOpenHandsPort)
+		cfg.OpenHands = detectOpenHandsURL(host)
 		cfg.Control = fmt.Sprintf("http://%s:9876", host)
 	}
 
@@ -221,6 +223,42 @@ func runInitInteractive(reader *bufio.Reader) error {
 	ui.Ok("Mode: %s", mode)
 	ui.Ok("Saved → %s", config.ClientConfigPath())
 	return nil
+}
+
+func detectOpenHandsURL(host string) string {
+	startPort := config.DefaultOpenHandsPort
+	for i := 0; i < config.OpenHandsPortRetryLimit; i++ {
+		port := startPort + i
+		url := fmt.Sprintf("http://%s:%d", host, port)
+		if openHandsResponds(url, time.Duration(config.OpenHandsProbeHTTPMillis)*time.Millisecond) {
+			if port != startPort {
+				ui.Warn("OpenHands default port %d unavailable, using %d", startPort, port)
+			}
+			return url
+		}
+	}
+	ui.Warn("OpenHands not detected, defaulting to port %d", startPort)
+	return fmt.Sprintf("http://%s:%d", host, startPort)
+}
+
+func openHandsResponds(url string, timeout time.Duration) bool {
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Get(strings.TrimRight(url, "/") + "/openapi.json")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return false
+	}
+	text := string(body)
+	return strings.Contains(text, "OpenHands") ||
+		strings.Contains(text, "InitSessionRequest") ||
+		strings.Contains(text, "/api/conversations")
 }
 
 func createCmd() *cobra.Command {

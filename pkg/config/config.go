@@ -9,7 +9,11 @@ import (
 
 var Version = "dev"
 
-const DefaultOpenHandsPort = 3100
+const (
+	DefaultOpenHandsPort     = 3100
+	OpenHandsPortRetryLimit  = 20
+	OpenHandsProbeHTTPMillis = 500
+)
 
 type ServerConfig struct {
 	Mode       string    `yaml:"mode"`

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,27 +19,27 @@ import (
 const totalSteps = 20
 
 type Deployer struct {
-	cfg      *config.ServerConfig
-	dns      dns.Provider
-	sshRun   func(cmd string) (string, error)
+	cfg       *config.ServerConfig
+	dns       dns.Provider
+	sshRun    func(cmd string) (string, error)
 	sshUpload func(content []byte, path string) error
-	secrets  *secrets
+	secrets   *secrets
 }
 
 type secrets struct {
-	DBPassword         string
-	RegistryPassword   string
-	MinioPassword      string
-	EncryptionKey      string
-	ProxyAPIKey        string
-	RunnerAPIKey       string
-	SSHGatewayAPIKey   string
-	GWPrivateKeyB64    string
-	GWPublicKeyB64     string
-	HostKeyB64         string
-	AdminPasswordHash  string
-	DaytonaAPIKey      string
-	DaytonaAPIKeyHash  string
+	DBPassword        string
+	RegistryPassword  string
+	MinioPassword     string
+	EncryptionKey     string
+	ProxyAPIKey       string
+	RunnerAPIKey      string
+	SSHGatewayAPIKey  string
+	GWPrivateKeyB64   string
+	GWPublicKeyB64    string
+	HostKeyB64        string
+	AdminPasswordHash string
+	DaytonaAPIKey     string
+	DaytonaAPIKeyHash string
 }
 
 func New(cfg *config.ServerConfig, sshRun func(string) (string, error), sshUpload func([]byte, string) error) *Deployer {
@@ -246,7 +247,7 @@ func (d *Deployer) step10GenerateCompose() error {
 	}
 
 	daytonaData := map[string]string{
-		"EncryptionKey":            d.secrets.EncryptionKey,
+		"EncryptionKey":           d.secrets.EncryptionKey,
 		"DBPassword":              d.secrets.DBPassword,
 		"RegistryPassword":        d.secrets.RegistryPassword,
 		"MinioPassword":           d.secrets.MinioPassword,
@@ -262,7 +263,7 @@ func (d *Deployer) step10GenerateCompose() error {
 		"SSHHostKeyB64":           d.secrets.HostKeyB64,
 		"PublicIP":                d.cfg.PublicIP,
 		"SSHPort":                 fmt.Sprintf("%d", d.cfg.Ports.SSH),
-		"InstallDir":             dir,
+		"InstallDir":              dir,
 	}
 
 	daytonaYml, err := embedded.RenderTemplate("docker-compose.daytona.yml.tmpl", daytonaData)
@@ -303,8 +304,8 @@ func (d *Deployer) step10GenerateCompose() error {
 		}
 
 		traefikData := map[string]string{
-			"ACMEEmail":      "admin@" + d.cfg.Domain,
-			"DNSProvider":    d.dns.Name(),
+			"ACMEEmail":       "admin@" + d.cfg.Domain,
+			"DNSProvider":     d.dns.Name(),
 			"TraefikEnvBlock": d.dns.TraefikEnvBlock(),
 		}
 		traefikYml, err := embedded.RenderTemplate("docker-compose.traefik.yml.tmpl", traefikData)
@@ -515,13 +516,37 @@ func (d *Deployer) step19DeployOpenHands() error {
 	}
 
 	dir := d.cfg.InstallDir
-	openHandsURL := fmt.Sprintf("http://%s:%d", d.cfg.PublicIP, d.cfg.Ports.OpenHands)
-	openHandsPort := fmt.Sprintf("%d", d.cfg.Ports.OpenHands)
 	if d.cfg.Mode == "domain" {
-		openHandsURL = fmt.Sprintf("https://openhands.%s", d.cfg.Domain)
-		openHandsPort = ""
+		return d.deployOpenHands(dir, fmt.Sprintf("https://openhands.%s", d.cfg.Domain), "")
 	}
 
+	startPort := d.cfg.Ports.OpenHands
+	if startPort == 0 {
+		startPort = config.DefaultOpenHandsPort
+	}
+	var lastErr error
+	for i := 0; i < config.OpenHandsPortRetryLimit; i++ {
+		port := startPort + i
+		openHandsURL := fmt.Sprintf("http://%s:%d", d.cfg.PublicIP, port)
+		err := d.deployOpenHands(dir, openHandsURL, strconv.Itoa(port))
+		if err == nil {
+			if port != startPort {
+				ui.Warn("OpenHands port %d unavailable, using %d", startPort, port)
+			}
+			d.cfg.Ports.OpenHands = port
+			d.allowOpenHandsPort(port)
+			return nil
+		}
+		lastErr = err
+		if !isPortConflictError(err) {
+			return err
+		}
+		ui.Warn("OpenHands port %d is unavailable, retrying %d", port, port+1)
+	}
+	return fmt.Errorf("no available OpenHands port from %d to %d: %w", startPort, startPort+config.OpenHandsPortRetryLimit-1, lastErr)
+}
+
+func (d *Deployer) deployOpenHands(dir, openHandsURL, openHandsPort string) error {
 	ohData := map[string]string{
 		"LLMModel":      d.cfg.LLM.Model,
 		"LLMBaseURL":    d.cfg.LLM.BaseURL,
@@ -538,8 +563,26 @@ func (d *Deployer) step19DeployOpenHands() error {
 	}
 
 	script := fmt.Sprintf(`cd %s && docker compose -f docker-compose.openhands.yml up -d`, dir)
-	_, err = d.sshRun(script)
-	return err
+	out, err := d.sshRun(script)
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, out)
+	}
+	return nil
+}
+
+func (d *Deployer) allowOpenHandsPort(port int) {
+	_, _ = d.sshRun(fmt.Sprintf("ufw allow %d/tcp >/dev/null 2>&1 || true", port))
+}
+
+func isPortConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "address already in use") ||
+		strings.Contains(msg, "port is already allocated") ||
+		strings.Contains(msg, "bind:") ||
+		strings.Contains(msg, "driver failed programming external connectivity")
 }
 
 func (d *Deployer) step20RegisterSystemd() error {
@@ -570,7 +613,7 @@ WantedBy=multi-user.target
 	return err
 }
 
-func (d *Deployer) GetAPIKey() string { return d.secrets.DaytonaAPIKey }
+func (d *Deployer) GetAPIKey() string   { return d.secrets.DaytonaAPIKey }
 func (d *Deployer) GetPublicIP() string { return d.cfg.PublicIP }
 
 func RandomHex(n int) string {
