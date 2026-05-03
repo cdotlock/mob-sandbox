@@ -53,9 +53,41 @@ type sandboxItem struct {
 	state string
 }
 
-func (i sandboxItem) Title() string       { return fmt.Sprintf("%-12s %s", shortID(i.id), i.state) }
-func (i sandboxItem) Description() string { return i.id }
 func (i sandboxItem) FilterValue() string { return i.id + " " + i.state }
+
+type sandboxDelegate struct{}
+
+func (d sandboxDelegate) Height() int  { return 2 }
+func (d sandboxDelegate) Spacing() int { return 1 }
+func (d sandboxDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d sandboxDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	sb, ok := item.(sandboxItem)
+	if !ok {
+		return
+	}
+
+	width := maxInt(24, m.Width()-4)
+	selected := index == m.Index()
+	cursor := " "
+	if selected {
+		cursor = ">"
+	}
+
+	title := sandboxTitleStyle.Render(shortID(sb.id))
+	badge := stateBadge(sb.state)
+	firstLine := lipgloss.JoinHorizontal(lipgloss.Center, cursor+" ", title, " ", badge)
+	secondLine := mutedStyle.Render("  " + sb.id)
+	row := lipgloss.JoinVertical(lipgloss.Left, firstLine, secondLine)
+	if selected {
+		row = sandboxSelectedRowStyle.Width(width).Render(row)
+	} else {
+		row = sandboxRowStyle.Width(width).Render(row)
+	}
+	fmt.Fprint(w, row)
+}
 
 type activeForward struct {
 	ID         int
@@ -90,6 +122,7 @@ type tuiModel struct {
 	width      int
 	height     int
 	showHelp   bool
+	focusID    string
 }
 
 type sandboxesLoadedMsg struct {
@@ -200,14 +233,13 @@ func runTUI(ctx context.Context) error {
 
 func newTUIModel(cfg *config.ClientConfig) tuiModel {
 	items := []list.Item{}
-	delegate := list.NewDefaultDelegate()
-	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(lipgloss.Color("42")).BorderForeground(lipgloss.Color("42"))
-	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(lipgloss.Color("245")).BorderForeground(lipgloss.Color("42"))
+	delegate := sandboxDelegate{}
 
 	l := list.New(items, delegate, 80, 18)
 	l.Title = "Sandboxes"
 	l.SetShowHelp(false)
-	l.SetFilteringEnabled(false)
+	l.SetFilteringEnabled(true)
+	l.SetShowFilter(true)
 	l.SetShowStatusBar(false)
 	l.SetStatusBarItemName("sandbox", "sandboxes")
 
@@ -261,6 +293,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("error", fmt.Sprintf("Create failed: %v", msg.err))
 			return m, nil
 		}
+		m.focusID = msg.id
 		m.setStatus("ok", fmt.Sprintf("%s ready (%s)", msg.id, msg.duration.Round(time.Second)))
 		return m, loadSandboxesCmd(m.client)
 	case sshPreparedMsg:
@@ -351,6 +384,16 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return next, cmd
 	}
 
+	if m.list.FilterState() == list.Filtering {
+		if key, ok := msg.(tea.KeyMsg); ok && key.String() == "ctrl+c" {
+			m.stopAllForwards()
+			return m, tea.Quit
+		}
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		return m, cmd
+	}
+
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "ctrl+c", "q":
@@ -390,9 +433,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) View() string {
-	header := titleStyle.Render("mob") + " " + mutedStyle.Render(fmt.Sprintf("%s · %s mode", m.cfg.Server, defaultString(m.cfg.Mode, "ip")))
+	header := m.headerView()
 
 	body := m.list.View()
+	if len(m.list.Items()) == 0 && m.list.FilterState() == list.Unfiltered && m.mode != modeBusy {
+		body = m.emptyStateView()
+	}
 	side := m.sideView()
 	if m.width >= 110 {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, body, "  ", side)
@@ -410,28 +456,71 @@ func (m tuiModel) View() string {
 	return appStyle.Width(maxInt(1, m.width)).Render(lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", m.footerView()))
 }
 
+func (m tuiModel) headerView() string {
+	total, ready, other := m.sandboxCounts()
+	parts := []string{
+		m.cfg.Server,
+		defaultString(m.cfg.Mode, "ip") + " mode",
+		fmt.Sprintf("%d total", total),
+		fmt.Sprintf("%d ready", ready),
+	}
+	if other > 0 {
+		parts = append(parts, fmt.Sprintf("%d changing", other))
+	}
+	return titleStyle.Render("mob") + " " + mutedStyle.Render(strings.Join(parts, " | "))
+}
+
+func (m tuiModel) emptyStateView() string {
+	lines := []string{
+		sectionStyle.Render("No sandboxes"),
+		"",
+		"Press n to create a sandbox.",
+		"Press r to refresh.",
+	}
+	return emptyStyle.Width(maxInt(40, m.list.Width()-4)).Render(strings.Join(lines, "\n"))
+}
+
 func (m tuiModel) sideView() string {
 	var b strings.Builder
+	b.WriteString(sectionStyle.Render("Selected"))
+	b.WriteString("\n")
+	if selected, ok := m.selectedSandbox(); ok {
+		b.WriteString("  ")
+		b.WriteString(sandboxTitleStyle.Render(shortID(selected.id)))
+		b.WriteString(" ")
+		b.WriteString(stateBadge(selected.state))
+		b.WriteString("\n")
+		b.WriteString("  ")
+		b.WriteString(mutedStyle.Render(selected.id))
+		b.WriteString("\n")
+	} else {
+		b.WriteString("  none\n")
+	}
+
+	b.WriteString("\n")
 	b.WriteString(sectionStyle.Render("Actions"))
 	b.WriteString("\n")
 	actions := []string{
-		"enter/s  SSH",
-		"a        Claude Code",
-		"c/n      create",
-		"f        forward",
-		"u        preview URL",
-		"e        expose",
-		"d        delete",
-		"o        OpenHands",
-		"p        power",
-		"r        refresh",
-		"x        stop tunnel",
-		"?        help",
-		"q        quit",
+		"enter  SSH",
+		"a      Claude Code",
+		"n      create sandbox",
+		"f      forward port",
+		"x      stop tunnel",
+		"/      filter list",
+		"r      refresh",
+		"q      quit",
 	}
 	if !m.showHelp {
-		actions = actions[:8]
-		actions = append(actions, "?        more")
+		actions = append(actions, "?      more")
+	} else {
+		actions = append(actions,
+			"u      preview URL",
+			"e      expose route",
+			"d      delete",
+			"o      OpenHands",
+			"p      power",
+			"?      less",
+		)
 	}
 	for _, line := range actions {
 		b.WriteString("  ")
@@ -445,8 +534,13 @@ func (m tuiModel) sideView() string {
 	if len(m.forwards) == 0 {
 		b.WriteString("  none\n")
 	} else {
+		selectedID := m.selectedSandboxID()
 		for _, f := range m.forwards {
-			b.WriteString(fmt.Sprintf("  #%d %s:%d -> localhost:%d\n", f.ID, shortID(f.SandboxID), f.RemotePort, f.LocalPort))
+			prefix := " "
+			if selectedID != "" && f.SandboxID == selectedID {
+				prefix = ">"
+			}
+			b.WriteString(fmt.Sprintf("  %s #%d %s:%d -> localhost:%d\n", prefix, f.ID, shortID(f.SandboxID), f.RemotePort, f.LocalPort))
 		}
 	}
 
@@ -643,14 +737,22 @@ func (m tuiModel) askStopTunnel() (tea.Model, tea.Cmd) {
 		m.setStatus("info", "No active tunnels")
 		return m, nil
 	}
+	selectedForwards := m.forwardsForSandbox(m.selectedSandboxID())
+	if len(selectedForwards) == 1 {
+		return m.stopForward(selectedForwards[0].ID), nil
+	}
 	if len(m.forwards) == 1 {
 		return m.stopForward(m.forwards[0].ID), nil
+	}
+	defaultID := m.forwards[0].ID
+	if len(selectedForwards) > 0 {
+		defaultID = selectedForwards[0].ID
 	}
 	return m.ask(promptState{
 		kind:  promptStopTunnel,
 		title: "Stop tunnel",
 		help:  "Enter the tunnel number shown in the Tunnels panel.",
-	}, strconv.Itoa(m.forwards[0].ID))
+	}, strconv.Itoa(defaultID))
 }
 
 func (m tuiModel) askPower() (tea.Model, tea.Cmd) {
@@ -707,6 +809,10 @@ func (m tuiModel) withBusy(label string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) setSandboxes(sandboxes []daytona.Sandbox) tea.Cmd {
 	selected := m.selectedSandboxID()
+	if m.focusID != "" {
+		selected = m.focusID
+		m.focusID = ""
+	}
 	items := make([]list.Item, 0, len(sandboxes))
 	for _, sb := range sandboxes {
 		items = append(items, sandboxItem{id: sb.ID, state: sb.State})
@@ -729,16 +835,51 @@ func (m *tuiModel) setSandboxes(sandboxes []daytona.Sandbox) tea.Cmd {
 	return cmd
 }
 
-func (m tuiModel) selectedSandboxID() string {
+func (m tuiModel) sandboxCounts() (total, ready, other int) {
+	items := m.list.Items()
+	total = len(items)
+	for _, item := range items {
+		sb, ok := item.(sandboxItem)
+		if !ok {
+			continue
+		}
+		if isSandboxReady(sb.state) {
+			ready++
+		} else {
+			other++
+		}
+	}
+	return total, ready, other
+}
+
+func (m tuiModel) selectedSandbox() (sandboxItem, bool) {
 	item := m.list.SelectedItem()
 	if item == nil {
-		return ""
+		return sandboxItem{}, false
 	}
 	sb, ok := item.(sandboxItem)
+	return sb, ok
+}
+
+func (m tuiModel) selectedSandboxID() string {
+	sb, ok := m.selectedSandbox()
 	if !ok {
 		return ""
 	}
 	return sb.id
+}
+
+func (m tuiModel) forwardsForSandbox(sandboxID string) []activeForward {
+	if sandboxID == "" {
+		return nil
+	}
+	var out []activeForward
+	for _, f := range m.forwards {
+		if f.SandboxID == sandboxID {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func (m *tuiModel) stopAllForwards() {
@@ -894,14 +1035,38 @@ func maxInt(a, b int) int {
 	return b
 }
 
+func stateBadge(state string) string {
+	style := stateOtherStyle
+	switch state {
+	case "started", "running":
+		style = stateReadyStyle
+	case "starting", "pending":
+		style = stateBusyStyle
+	case "error", "failed":
+		style = stateErrorStyle
+	case "stopped", "stopping":
+		style = stateMutedStyle
+	}
+	return style.Render(" " + defaultString(state, "unknown") + " ")
+}
+
 var (
-	appStyle     = lipgloss.NewStyle().Padding(1, 2)
-	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
-	mutedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	sectionStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
-	panelStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(1, 2)
-	promptStyle  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("42")).Padding(1, 2)
-	infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
-	okStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	appStyle                = lipgloss.NewStyle().Padding(1, 2)
+	titleStyle              = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+	mutedStyle              = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	sectionStyle            = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
+	panelStyle              = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(1, 2)
+	promptStyle             = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("42")).Padding(1, 2)
+	emptyStyle              = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(2, 3)
+	sandboxRowStyle         = lipgloss.NewStyle().Padding(0, 1)
+	sandboxSelectedRowStyle = lipgloss.NewStyle().Padding(0, 1).Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(lipgloss.Color("42"))
+	sandboxTitleStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	stateReadyStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Background(lipgloss.Color("235"))
+	stateBusyStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Background(lipgloss.Color("235"))
+	stateErrorStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Background(lipgloss.Color("235"))
+	stateMutedStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Background(lipgloss.Color("235"))
+	stateOtherStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Background(lipgloss.Color("235"))
+	infoStyle               = lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
+	okStyle                 = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	errorStyle              = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 )
