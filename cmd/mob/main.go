@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -82,19 +83,57 @@ func isSandboxReady(state string) bool {
 	return state == "started" || state == "running"
 }
 
+func isRetryableAPIError(err error) bool {
+	var timeout interface{ Timeout() bool }
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return true
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "EOF")
+}
+
+func getSandboxWithRetry(client *daytona.Client, sandboxID string, attempts int, delay time.Duration) (*daytona.Sandbox, error) {
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		sb, err := client.GetSandbox(sandboxID)
+		if err == nil {
+			return sb, nil
+		}
+
+		lastErr = err
+		if !isRetryableAPIError(err) || i == attempts-1 {
+			break
+		}
+		time.Sleep(delay)
+	}
+	return nil, lastErr
+}
+
 func waitSandboxReady(client *daytona.Client, sandboxID string) error {
+	var lastErr error
 	for i := 0; i < 60; i++ {
 		s, err := client.GetSandbox(sandboxID)
-		if err == nil && isSandboxReady(s.State) {
-			return nil
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = nil
+			if isSandboxReady(s.State) {
+				return nil
+			}
 		}
 		time.Sleep(2 * time.Second)
+	}
+	if lastErr != nil {
+		return fmt.Errorf("sandbox %s did not become ready: last lookup failed: %w", sandboxID, lastErr)
 	}
 	return fmt.Errorf("sandbox %s did not become ready", sandboxID)
 }
 
 func ensureSandboxReady(client *daytona.Client, sandboxID string) error {
-	s, err := client.GetSandbox(sandboxID)
+	s, err := getSandboxWithRetry(client, sandboxID, 3, 2*time.Second)
 	if err != nil {
 		return err
 	}

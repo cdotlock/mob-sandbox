@@ -845,7 +845,7 @@ func powerTeaCmd(action string, cfg *config.ClientConfig) tea.Cmd {
 }
 
 func ensureSandboxReadySilent(client *daytona.Client, sandboxID string) error {
-	sb, err := client.GetSandbox(sandboxID)
+	sb, err := getSandboxWithRetry(client, sandboxID, 3, 2*time.Second)
 	if err != nil {
 		return err
 	}
