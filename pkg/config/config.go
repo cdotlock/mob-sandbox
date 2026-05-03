@@ -9,6 +9,8 @@ import (
 
 var Version = "dev"
 
+const DefaultOpenHandsPort = 3100
+
 type ServerConfig struct {
 	Mode       string    `yaml:"mode"`
 	PublicIP   string    `yaml:"public_ip"`
@@ -41,13 +43,13 @@ type DNSConfig struct {
 }
 
 type ClientConfig struct {
-	Server   string `yaml:"server"`
-	APIKey   string `yaml:"api_key"`
-	SSHHost  string `yaml:"ssh_host"`
-	SSHPort  int    `yaml:"ssh_port"`
+	Server    string `yaml:"server"`
+	APIKey    string `yaml:"api_key"`
+	SSHHost   string `yaml:"ssh_host"`
+	SSHPort   int    `yaml:"ssh_port"`
 	OpenHands string `yaml:"openhands"`
-	Control  string `yaml:"control"`
-	Mode     string `yaml:"mode"`
+	Control   string `yaml:"control"`
+	Mode      string `yaml:"mode"`
 
 	// Environment injected into every new sandbox created by this client.
 	ClaudeCodeEnv map[string]string `yaml:"claude_code_env,omitempty"`
@@ -65,7 +67,7 @@ func DefaultServerConfig() *ServerConfig {
 		Ports: Ports{
 			API:       3986,
 			SSH:       2222,
-			OpenHands: 3000,
+			OpenHands: DefaultOpenHandsPort,
 			Proxy:     4000,
 			Control:   9876,
 		},

@@ -110,7 +110,7 @@ daytona_api_key: "poc-..."
 ports:
   api: 3986
   ssh: 2222
-  openhands: 3000
+  openhands: 3100
   proxy: 4000
   control: 9876                     # mob-server 控制 API 端口
 llm:
@@ -177,7 +177,7 @@ server: "http://203.0.113.50:3986"
 api_key: "poc-..."
 ssh_host: "203.0.113.50"
 ssh_port: 2222
-openhands: "http://203.0.113.50:3000"
+openhands: "http://203.0.113.50:3100"
 control: "http://203.0.113.50:9876"      # mob-server 控制 API
 mode: "ip"                                # ip 或 domain
 ```
@@ -192,14 +192,14 @@ $ mob init
 ? API Key: poc-a3f7b2e19c...
   ✓ 连接成功 (mode: ip)
   ✓ SSH 203.0.113.50:2222
-  ✓ OpenHands 203.0.113.50:3000
+  ✓ OpenHands 203.0.113.50:3100
   Saved → ~/.config/mob/config.yaml
 ```
 
 探测逻辑：
 1. `GET {server}/api/health` 验证连通 + 取版本
 2. 探测 SSH gateway 端口（默认 2222）
-3. 探测 OpenHands 端口（默认 3000，可能 12000）
+3. 探测 OpenHands 端口（默认 3100，可能 12000）
 4. `GET {server}/api/info` 探测 mode（ip / domain）
 
 ### mob ssh
@@ -235,7 +235,7 @@ $ mob expose a1b2c3d4 3000 mydemo
 
 ```
 $ mob openhands
-  ✓ Opened http://203.0.113.50:3000
+  ✓ Opened http://203.0.113.50:3100
 ```
 
 直接打开浏览器。在 OpenHands UI 里建对话、下任务，OpenHands 自己管理它的 runtime 容器。

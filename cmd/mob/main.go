@@ -209,7 +209,7 @@ func runInitInteractive(reader *bufio.Reader) error {
 		cfg.OpenHands = fmt.Sprintf("https://openhands.%s", domain)
 		cfg.Control = fmt.Sprintf("https://control.%s", domain)
 	} else {
-		cfg.OpenHands = fmt.Sprintf("http://%s:3000", host)
+		cfg.OpenHands = fmt.Sprintf("http://%s:%d", host, config.DefaultOpenHandsPort)
 		cfg.Control = fmt.Sprintf("http://%s:9876", host)
 	}
 
