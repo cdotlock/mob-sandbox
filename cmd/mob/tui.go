@@ -16,7 +16,6 @@ import (
 	"github.com/cdotlock/mob-sandbox/pkg/daytona"
 	"github.com/cdotlock/mob-sandbox/pkg/power"
 	"github.com/cdotlock/mob-sandbox/pkg/remote"
-	"github.com/cdotlock/mob-sandbox/pkg/ui"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -34,6 +33,13 @@ const (
 	modeBusy
 )
 
+type tuiFocus int
+
+const (
+	focusSandboxes tuiFocus = iota
+	focusMenu
+)
+
 type promptKind int
 
 const (
@@ -47,6 +53,31 @@ const (
 	promptPowerAction
 	promptPowerConfirm
 )
+
+type menuActionID int
+
+const (
+	actionSSH menuActionID = iota
+	actionClaude
+	actionCreate
+	actionForward
+	actionRefresh
+	actionInit
+	actionURL
+	actionExpose
+	actionDelete
+	actionOpenHands
+	actionPower
+	actionStopTunnel
+	actionFilter
+	actionQuit
+)
+
+type menuAction struct {
+	id    menuActionID
+	key   string
+	label string
+}
 
 type sandboxItem struct {
 	id    string
@@ -79,7 +110,7 @@ func (d sandboxDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	title := sandboxTitleStyle.Render(shortID(sb.id))
 	badge := stateBadge(sb.state)
 	firstLine := lipgloss.JoinHorizontal(lipgloss.Center, cursor+" ", title, " ", badge)
-	secondLine := mutedStyle.Render("  " + sb.id)
+	secondLine := mutedStyle.Render("  " + truncateText(sb.id, maxInt(8, width-4)))
 	row := lipgloss.JoinVertical(lipgloss.Left, firstLine, secondLine)
 	if selected {
 		row = sandboxSelectedRowStyle.Width(width).Render(row)
@@ -123,6 +154,8 @@ type tuiModel struct {
 	height     int
 	showHelp   bool
 	focusID    string
+	focus      tuiFocus
+	menuIndex  int
 }
 
 type sandboxesLoadedMsg struct {
@@ -203,28 +236,12 @@ func runTUI(ctx context.Context) error {
 		return fmt.Errorf("mob tui requires an interactive terminal")
 	}
 
-	reader := bufio.NewReader(os.Stdin)
 	cfg, err := loadCfg()
 	if err != nil {
-		ui.Warn("mob is not configured yet")
-		ok, promptErr := confirmPrompt(reader, "Run mob init now?", true)
-		if promptErr != nil {
-			return promptErr
-		}
-		if !ok {
-			ui.Info("Run 'mob init' before opening the TUI")
-			return nil
-		}
-		if err := runInitInteractive(reader); err != nil {
-			return err
-		}
-		cfg, err = loadCfg()
-		if err != nil {
-			return err
-		}
+		cfg = nil
 	}
 
-	if cfg.SSHPort == 0 {
+	if cfg != nil && cfg.SSHPort == 0 {
 		cfg.SSHPort = 2222
 	}
 
@@ -257,21 +274,30 @@ func newTUIModel(cfg *config.ClientConfig) tuiModel {
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("42"))),
 	)
 
-	return tuiModel{
+	model := tuiModel{
 		cfg:        cfg,
-		client:     newClient(cfg),
 		list:       l,
 		spinner:    spin,
 		input:      in,
-		mode:       modeBusy,
-		busyLabel:  "Loading sandboxes",
+		mode:       modeDashboard,
 		nextTunnel: 1,
-		status:     "Loading sandboxes...",
+		focus:      focusMenu,
+		status:     "Not configured. Press enter to initialize.",
 		statusKind: "info",
 	}
+	if cfg != nil {
+		model.client = newClient(cfg)
+		model.mode = modeBusy
+		model.busyLabel = "Loading sandboxes"
+		model.status = "Loading sandboxes..."
+	}
+	return model
 }
 
 func (m tuiModel) Init() tea.Cmd {
+	if !m.isConfigured() {
+		return nil
+	}
 	return tea.Batch(m.spinner.Tick, loadSandboxesCmd(m.client))
 }
 
@@ -376,6 +402,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cfg = msg.cfg
 		m.client = newClient(msg.cfg)
 		m.focusID = ""
+		m.focus = focusMenu
+		m.menuIndex = 0
 		return m.withBusy("Refreshing sandboxes", loadSandboxesCmd(m.client))
 	}
 
@@ -417,32 +445,63 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "?":
 			m.showHelp = !m.showHelp
+			m.clampMenuIndex()
 			return m, nil
-		case "r":
-			return m.withBusy("Refreshing sandboxes", loadSandboxesCmd(m.client))
-		case "i":
-			return m.withBusy("Running init", runInitTeaCmd())
-		case "c", "n":
-			return m.withBusy("Creating sandbox", createSandboxCmd(m.cfg, m.client))
-		case "enter", "s":
+		case "tab":
+			m.toggleFocus()
+			return m, nil
+		case "left":
+			m.focus = focusSandboxes
+			return m, nil
+		case "right":
+			m.focus = focusMenu
+			return m, nil
+		case "up", "k":
+			if m.focus == focusMenu {
+				m.moveMenu(-1)
+				return m, nil
+			}
+		case "down", "j":
+			if m.focus == focusMenu {
+				m.moveMenu(1)
+				return m, nil
+			}
+		case "enter":
+			if m.focus == focusMenu {
+				return m.runSelectedMenuAction()
+			}
 			return m.prepareSSH(false)
+		case "r":
+			return m.executeAction(actionRefresh)
+		case "i":
+			return m.executeAction(actionInit)
+		case "c", "n":
+			return m.executeAction(actionCreate)
+		case "s":
+			return m.executeAction(actionSSH)
 		case "a":
-			return m.prepareSSH(true)
+			return m.executeAction(actionClaude)
 		case "f":
-			return m.askPort(promptForwardPort, "Forward selected sandbox", "Keep a localhost tunnel open while staying in this TUI")
+			return m.executeAction(actionForward)
 		case "u":
-			return m.askPort(promptURLPort, "Preview URL", "Generate a one-hour Daytona preview URL")
+			return m.executeAction(actionURL)
 		case "e":
-			return m.askPort(promptExposePort, "Expose route", "Create a permanent subdomain route")
+			return m.executeAction(actionExpose)
 		case "d", "backspace":
-			return m.askDelete()
+			return m.executeAction(actionDelete)
 		case "x":
-			return m.askStopTunnel()
+			return m.executeAction(actionStopTunnel)
+		case "/":
+			return m.executeAction(actionFilter)
 		case "o":
-			return m.openOpenHands()
+			return m.executeAction(actionOpenHands)
 		case "p":
-			return m.askPower()
+			return m.executeAction(actionPower)
 		}
+	}
+
+	if m.focus == focusMenu {
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -454,11 +513,11 @@ func (m tuiModel) View() string {
 	header := m.headerView()
 
 	body := m.list.View()
-	if len(m.list.Items()) == 0 && m.list.FilterState() == list.Unfiltered && m.mode != modeBusy {
+	if !m.isConfigured() || (len(m.list.Items()) == 0 && m.list.FilterState() == list.Unfiltered && m.mode != modeBusy) {
 		body = m.emptyStateView()
 	}
 	side := m.sideView()
-	if m.width >= 110 {
+	if useHorizontalLayout(m.width) {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, body, "  ", side)
 	} else {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, side)
@@ -476,9 +535,15 @@ func (m tuiModel) View() string {
 
 func (m tuiModel) headerView() string {
 	total, ready, other := m.sandboxCounts()
+	server := "not configured"
+	mode := "setup"
+	if m.cfg != nil {
+		server = m.cfg.Server
+		mode = defaultString(m.cfg.Mode, "ip") + " mode"
+	}
 	parts := []string{
-		m.cfg.Server,
-		defaultString(m.cfg.Mode, "ip") + " mode",
+		server,
+		mode,
 		fmt.Sprintf("%d total", total),
 		fmt.Sprintf("%d ready", ready),
 	}
@@ -492,11 +557,21 @@ func (m tuiModel) headerView() string {
 }
 
 func (m tuiModel) emptyStateView() string {
+	if !m.isConfigured() {
+		lines := []string{
+			logoWordmarkStyle.Render("MOB SANDBOX"),
+			"",
+			"Connect this client to a sandbox server.",
+			"",
+			selectedMenuHintStyle.Render("enter  initialize"),
+			mutedStyle.Render("q      quit"),
+		}
+		return emptyStyle.Width(maxInt(40, m.list.Width()-4)).Render(strings.Join(lines, "\n"))
+	}
 	lines := []string{
 		sectionStyle.Render("No sandboxes"),
 		"",
 		"Press n to create a sandbox.",
-		"Press i to initialize or change config.",
 		"Press r to refresh.",
 	}
 	return emptyStyle.Width(maxInt(40, m.list.Width()-4)).Render(strings.Join(lines, "\n"))
@@ -504,6 +579,8 @@ func (m tuiModel) emptyStateView() string {
 
 func (m tuiModel) sideView() string {
 	var b strings.Builder
+	b.WriteString(logoPanelStyle.Render("Mob SandBox"))
+	b.WriteString("\n\n")
 	b.WriteString(sectionStyle.Render("Selected"))
 	b.WriteString("\n")
 	if selected, ok := m.selectedSandbox(); ok {
@@ -512,9 +589,11 @@ func (m tuiModel) sideView() string {
 		b.WriteString(" ")
 		b.WriteString(stateBadge(selected.state))
 		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(mutedStyle.Render(selected.id))
-		b.WriteString("\n")
+		if m.width >= 96 {
+			b.WriteString("  ")
+			b.WriteString(mutedStyle.Render(selected.id))
+			b.WriteString("\n")
+		}
 	} else {
 		b.WriteString("  none\n")
 	}
@@ -522,63 +601,101 @@ func (m tuiModel) sideView() string {
 	b.WriteString("\n")
 	b.WriteString(primarySectionStyle.Render("Primary"))
 	b.WriteString("\n")
-	primaryActions := []string{
-		"enter  SSH",
-		"a      Claude Code",
-		"n      create sandbox",
-		"f      forward port",
-	}
-	for _, line := range primaryActions {
-		b.WriteString("  ")
-		b.WriteString(primaryActionStyle.Render(line))
+	b.WriteString(m.menuView(m.primaryActions(), 0))
+
+	primaryCount := len(m.primaryActions())
+	if m.showHelp {
+		b.WriteString("\n")
+		b.WriteString(secondarySectionStyle.Render("Secondary"))
+		b.WriteString("\n")
+		b.WriteString(m.menuView(m.secondaryActions(), primaryCount))
+	} else {
+		b.WriteString("\n")
+		b.WriteString(mutedStyle.Render("  ?      show secondary"))
 		b.WriteString("\n")
 	}
 
-	b.WriteString("\n")
-	b.WriteString(secondarySectionStyle.Render("Secondary"))
-	b.WriteString("\n")
-	secondaryActions := []string{
-		"/      filter list",
-		"r      refresh",
-		"i      init config",
-		"x      stop tunnel",
-		"q      quit",
-	}
-	if !m.showHelp {
-		secondaryActions = append(secondaryActions, "?      more")
-	} else {
-		secondaryActions = append(secondaryActions,
-			"u      preview URL",
-			"e      expose route",
-			"d      delete",
-			"o      OpenHands",
-			"p      power",
-			"?      less",
-		)
-	}
-	for _, line := range secondaryActions {
-		b.WriteString("  ")
-		b.WriteString(secondaryActionStyle.Render(line))
+	if m.isConfigured() {
 		b.WriteString("\n")
-	}
-
-	b.WriteString("\n")
-	b.WriteString(sectionStyle.Render("Tunnels"))
-	b.WriteString("\n")
-	if len(m.forwards) == 0 {
-		b.WriteString("  none\n")
-	} else {
-		selectedID := m.selectedSandboxID()
-		for _, f := range m.forwards {
-			prefix := " "
-			if selectedID != "" && f.SandboxID == selectedID {
-				prefix = ">"
+		b.WriteString(sectionStyle.Render("Tunnels"))
+		b.WriteString("\n")
+		if len(m.forwards) == 0 {
+			b.WriteString("  none\n")
+		} else {
+			selectedID := m.selectedSandboxID()
+			for _, f := range m.forwards {
+				prefix := " "
+				if selectedID != "" && f.SandboxID == selectedID {
+					prefix = ">"
+				}
+				b.WriteString(fmt.Sprintf("  %s #%d %s:%d -> localhost:%d\n", prefix, f.ID, shortID(f.SandboxID), f.RemotePort, f.LocalPort))
 			}
-			b.WriteString(fmt.Sprintf("  %s #%d %s:%d -> localhost:%d\n", prefix, f.ID, shortID(f.SandboxID), f.RemotePort, f.LocalPort))
 		}
 	}
 
 	return panelStyle.Width(sidebarWidth(m.width)).Render(strings.TrimRight(b.String(), "\n"))
+}
+
+func (m tuiModel) menuView(actions []menuAction, offset int) string {
+	var b strings.Builder
+	for i, action := range actions {
+		index := offset + i
+		selected := m.focus == focusMenu && index == m.menuIndex
+		prefix := "  "
+		style := secondaryActionStyle
+		if offset == 0 {
+			style = primaryActionStyle
+		}
+		if selected {
+			prefix = "> "
+			style = selectedMenuStyle
+		}
+		b.WriteString(prefix)
+		b.WriteString(style.Render(fmt.Sprintf("%-6s %s", action.key, action.label)))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) primaryActions() []menuAction {
+	if !m.isConfigured() {
+		return []menuAction{
+			{id: actionInit, key: "enter", label: "Initialize client"},
+			{id: actionQuit, key: "q", label: "Quit"},
+		}
+	}
+	return []menuAction{
+		{id: actionSSH, key: "enter", label: "SSH"},
+		{id: actionClaude, key: "a", label: "Claude Code"},
+		{id: actionCreate, key: "n", label: "Create sandbox"},
+		{id: actionForward, key: "f", label: "Forward port"},
+		{id: actionRefresh, key: "r", label: "Refresh"},
+	}
+}
+
+func (m tuiModel) secondaryActions() []menuAction {
+	if !m.isConfigured() {
+		return nil
+	}
+	return []menuAction{
+		{id: actionInit, key: "i", label: "Reinitialize config"},
+		{id: actionFilter, key: "/", label: "Filter sandboxes"},
+		{id: actionStopTunnel, key: "x", label: "Stop tunnel"},
+		{id: actionURL, key: "u", label: "Preview URL"},
+		{id: actionExpose, key: "e", label: "Expose route"},
+		{id: actionOpenHands, key: "o", label: "OpenHands"},
+		{id: actionPower, key: "p", label: "Power control"},
+		{id: actionDelete, key: "d", label: "Delete sandbox"},
+		{id: actionQuit, key: "q", label: "Quit"},
+	}
+}
+
+func (m tuiModel) visibleActions() []menuAction {
+	actions := append([]menuAction{}, m.primaryActions()...)
+	if m.showHelp {
+		actions = append(actions, m.secondaryActions()...)
+	}
+	return actions
 }
 
 func (m tuiModel) promptView() string {
@@ -601,17 +718,25 @@ func (m tuiModel) footerView() string {
 	case "error":
 		style = errorStyle
 	}
-	return style.Render(status)
+	hint := "up/down choose | enter run | ? secondary"
+	if m.isConfigured() {
+		if m.focus == focusSandboxes {
+			hint = "sandbox focus | tab menu | enter SSH"
+		} else {
+			hint = "menu focus | tab sandboxes | enter run | ? secondary"
+		}
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, style.Render(status), mutedStyle.Render(hint))
 }
 
 func (m *tuiModel) resize() {
 	sidebar := sidebarWidth(m.width)
 	listWidth := m.width - sidebar - 8
-	if m.width < 110 {
+	if !useHorizontalLayout(m.width) {
 		listWidth = m.width - 4
 	}
-	if listWidth < 40 {
-		listWidth = 40
+	if listWidth < 30 {
+		listWidth = 30
 	}
 	listHeight := m.height - 10
 	if listHeight < 8 {
@@ -797,6 +922,71 @@ func (m tuiModel) askPower() (tea.Model, tea.Cmd) {
 	}, "status")
 }
 
+func (m tuiModel) runSelectedMenuAction() (tea.Model, tea.Cmd) {
+	actions := m.visibleActions()
+	if len(actions) == 0 {
+		return m, nil
+	}
+	if m.menuIndex < 0 {
+		m.menuIndex = 0
+	}
+	if m.menuIndex >= len(actions) {
+		m.menuIndex = len(actions) - 1
+	}
+	return m.executeAction(actions[m.menuIndex].id)
+}
+
+func (m tuiModel) executeAction(action menuActionID) (tea.Model, tea.Cmd) {
+	if !m.isConfigured() {
+		switch action {
+		case actionInit:
+			return m.withBusy("Running init", runInitTeaCmd())
+		case actionQuit:
+			m.stopAllForwards()
+			return m, tea.Quit
+		default:
+			m.setStatus("error", "Initialize Mob SandBox first")
+			return m, nil
+		}
+	}
+
+	switch action {
+	case actionSSH:
+		return m.prepareSSH(false)
+	case actionClaude:
+		return m.prepareSSH(true)
+	case actionCreate:
+		return m.withBusy("Creating sandbox", createSandboxCmd(m.cfg, m.client))
+	case actionForward:
+		return m.askPort(promptForwardPort, "Forward selected sandbox", "Keep a localhost tunnel open while staying in this TUI")
+	case actionRefresh:
+		return m.withBusy("Refreshing sandboxes", loadSandboxesCmd(m.client))
+	case actionInit:
+		return m.withBusy("Running init", runInitTeaCmd())
+	case actionURL:
+		return m.askPort(promptURLPort, "Preview URL", "Generate a one-hour Daytona preview URL")
+	case actionExpose:
+		return m.askPort(promptExposePort, "Expose route", "Create a permanent subdomain route")
+	case actionDelete:
+		return m.askDelete()
+	case actionOpenHands:
+		return m.openOpenHands()
+	case actionPower:
+		return m.askPower()
+	case actionStopTunnel:
+		return m.askStopTunnel()
+	case actionFilter:
+		m.focus = focusSandboxes
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+		return m, cmd
+	case actionQuit:
+		m.stopAllForwards()
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
 func (m tuiModel) ask(prompt promptState, value string) (tea.Model, tea.Cmd) {
 	m.mode = modePrompt
 	m.prompt = prompt
@@ -832,6 +1022,51 @@ func (m tuiModel) stopForward(id int) tuiModel {
 func (m *tuiModel) setStatus(kind, text string) {
 	m.statusKind = kind
 	m.status = text
+}
+
+func (m tuiModel) isConfigured() bool {
+	return m.cfg != nil && m.client != nil && m.cfg.Server != "" && m.cfg.APIKey != ""
+}
+
+func (m *tuiModel) toggleFocus() {
+	if !m.isConfigured() {
+		m.focus = focusMenu
+		return
+	}
+	if m.focus == focusMenu {
+		m.focus = focusSandboxes
+		return
+	}
+	m.focus = focusMenu
+}
+
+func (m *tuiModel) moveMenu(delta int) {
+	actions := m.visibleActions()
+	if len(actions) == 0 {
+		m.menuIndex = 0
+		return
+	}
+	m.menuIndex += delta
+	if m.menuIndex < 0 {
+		m.menuIndex = len(actions) - 1
+	}
+	if m.menuIndex >= len(actions) {
+		m.menuIndex = 0
+	}
+}
+
+func (m *tuiModel) clampMenuIndex() {
+	actions := m.visibleActions()
+	if len(actions) == 0 {
+		m.menuIndex = 0
+		return
+	}
+	if m.menuIndex >= len(actions) {
+		m.menuIndex = len(actions) - 1
+	}
+	if m.menuIndex < 0 {
+		m.menuIndex = 0
+	}
 }
 
 func (m tuiModel) withBusy(label string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
@@ -925,7 +1160,15 @@ func (m *tuiModel) stopAllForwards() {
 
 func loadSandboxesCmd(client *daytona.Client) tea.Cmd {
 	return func() tea.Msg {
-		sandboxes, err := client.ListSandboxes()
+		var sandboxes []daytona.Sandbox
+		var err error
+		for i := 0; i < 3; i++ {
+			sandboxes, err = client.ListSandboxes()
+			if err == nil || !isRetryableAPIError(err) {
+				break
+			}
+			time.Sleep(time.Second)
+		}
 		if err == nil {
 			sort.Slice(sandboxes, func(i, j int) bool {
 				if sandboxes[i].State == sandboxes[j].State {
@@ -1073,11 +1316,25 @@ func defaultString(value, def string) string {
 	return value
 }
 
+func truncateText(value string, width int) string {
+	if width <= 3 || len(value) <= width {
+		return value
+	}
+	return value[:width-3] + "..."
+}
+
 func sidebarWidth(width int) int {
-	if width < 110 {
+	if !useHorizontalLayout(width) {
 		return maxInt(40, width-4)
 	}
+	if width < 96 {
+		return 30
+	}
 	return 34
+}
+
+func useHorizontalLayout(width int) bool {
+	return width >= 78
 }
 
 func maxInt(a, b int) int {
@@ -1105,6 +1362,8 @@ func stateBadge(state string) string {
 var (
 	appStyle                = lipgloss.NewStyle().Padding(1, 2)
 	logoStyle               = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("42")).Padding(0, 1)
+	logoPanelStyle          = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("42")).Padding(0, 1).MarginBottom(1)
+	logoWordmarkStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
 	titleStyle              = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
 	mutedStyle              = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	sectionStyle            = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
@@ -1112,6 +1371,8 @@ var (
 	secondarySectionStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245"))
 	primaryActionStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	secondaryActionStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	selectedMenuStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("16")).Background(lipgloss.Color("42"))
+	selectedMenuHintStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
 	panelStyle              = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(1, 2)
 	promptStyle             = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("42")).Padding(1, 2)
 	emptyStyle              = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(2, 3)
