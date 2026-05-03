@@ -3,11 +3,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -21,12 +20,17 @@ import (
 
 func main() {
 	root := &cobra.Command{
-		Use:     "mob",
-		Short:   "mob-sandbox client CLI",
-		Version: config.Version,
+		Use:          "mob",
+		Short:        "mob-sandbox client CLI",
+		Version:      config.Version,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTUI(cmd.Context())
+		},
 	}
 
 	root.AddCommand(
+		tuiCmd(),
 		initCmd(),
 		createCmd(),
 		sshCmd(),
@@ -110,74 +114,74 @@ func initCmd() *cobra.Command {
 		Use:   "init",
 		Short: "Connect to server, save config",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			scanner := bufio.NewScanner(os.Stdin)
-
-			fmt.Print("  ? Server URL: ")
-			scanner.Scan()
-			server := strings.TrimSpace(scanner.Text())
-
-			fmt.Print("  ? API Key: ")
-			scanner.Scan()
-			apiKey := strings.TrimSpace(scanner.Text())
-
-			client := daytona.NewClient(server, apiKey)
-			if err := client.Health(); err != nil {
-				ui.Fail("Connection failed: %v", err)
-				return err
-			}
-			ui.Ok("Connected")
-
-			// Parse host from server URL
-			host := server
-			host = strings.TrimPrefix(host, "http://")
-			host = strings.TrimPrefix(host, "https://")
-			if idx := strings.Index(host, ":"); idx > 0 {
-				host = host[:idx]
-			}
-			if idx := strings.Index(host, "/"); idx > 0 {
-				host = host[:idx]
-			}
-
-			// Detect mode
-			mode := "ip"
-			info, err := client.GetInfo()
-			if err == nil {
-				if m, ok := info["mode"].(string); ok {
-					mode = m
-				}
-			}
-
-			cfg := &config.ClientConfig{
-				Server:  server,
-				APIKey:  apiKey,
-				SSHHost: host,
-				SSHPort: 2222,
-				Mode:    mode,
-			}
-
-			// Try to detect OpenHands
-			if mode == "domain" {
-				domain := host
-				if strings.Contains(host, "daytona.") {
-					domain = strings.TrimPrefix(host, "daytona.")
-				}
-				cfg.OpenHands = fmt.Sprintf("https://openhands.%s", domain)
-				cfg.Control = fmt.Sprintf("https://control.%s", domain)
-			} else {
-				cfg.OpenHands = fmt.Sprintf("http://%s:3000", host)
-				cfg.Control = fmt.Sprintf("http://%s:9876", host)
-			}
-
-			if err := cfg.Save(); err != nil {
-				return fmt.Errorf("save config: %w", err)
-			}
-
-			ui.Ok("SSH %s:%d", cfg.SSHHost, cfg.SSHPort)
-			ui.Ok("Mode: %s", mode)
-			ui.Ok("Saved → %s", config.ClientConfigPath())
-			return nil
+			return runInitInteractive(bufio.NewReader(os.Stdin))
 		},
 	}
+}
+
+func runInitInteractive(reader *bufio.Reader) error {
+	server, err := promptRequired(reader, "Server URL", "")
+	if err != nil {
+		return err
+	}
+	apiKey, err := promptRequired(reader, "API Key", "")
+	if err != nil {
+		return err
+	}
+
+	client := daytona.NewClient(server, apiKey)
+	if err := client.Health(); err != nil {
+		ui.Fail("Connection failed: %v", err)
+		return err
+	}
+	ui.Ok("Connected")
+
+	host := server
+	host = strings.TrimPrefix(host, "http://")
+	host = strings.TrimPrefix(host, "https://")
+	if idx := strings.Index(host, ":"); idx > 0 {
+		host = host[:idx]
+	}
+	if idx := strings.Index(host, "/"); idx > 0 {
+		host = host[:idx]
+	}
+
+	mode := "ip"
+	info, err := client.GetInfo()
+	if err == nil {
+		if m, ok := info["mode"].(string); ok {
+			mode = m
+		}
+	}
+
+	cfg := &config.ClientConfig{
+		Server:  server,
+		APIKey:  apiKey,
+		SSHHost: host,
+		SSHPort: 2222,
+		Mode:    mode,
+	}
+
+	if mode == "domain" {
+		domain := host
+		if strings.Contains(host, "daytona.") {
+			domain = strings.TrimPrefix(host, "daytona.")
+		}
+		cfg.OpenHands = fmt.Sprintf("https://openhands.%s", domain)
+		cfg.Control = fmt.Sprintf("https://control.%s", domain)
+	} else {
+		cfg.OpenHands = fmt.Sprintf("http://%s:3000", host)
+		cfg.Control = fmt.Sprintf("http://%s:9876", host)
+	}
+
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+
+	ui.Ok("SSH %s:%d", cfg.SSHHost, cfg.SSHPort)
+	ui.Ok("Mode: %s", mode)
+	ui.Ok("Saved → %s", config.ClientConfigPath())
+	return nil
 }
 
 func createCmd() *cobra.Command {
@@ -404,19 +408,7 @@ func urlCmd() *cobra.Command {
 				return fmt.Errorf("invalid port: %s", args[1])
 			}
 
-			// Extract domain from server URL
-			domain := cfg.SSHHost
-			serverURL := cfg.Server
-			serverURL = strings.TrimPrefix(serverURL, "https://")
-			serverURL = strings.TrimPrefix(serverURL, "http://")
-			if strings.HasPrefix(serverURL, "daytona.") {
-				domain = strings.TrimPrefix(serverURL, "daytona.")
-			}
-			if idx := strings.Index(domain, "/"); idx > 0 {
-				domain = domain[:idx]
-			}
-
-			previewURL := newClient(cfg).BuildPreviewURL(args[0], port, domain)
+			previewURL := newClient(cfg).BuildPreviewURL(args[0], port, previewDomain(cfg))
 			fmt.Printf("  %s  (auth via cookie, 1h)\n", previewURL)
 			return nil
 		},
@@ -442,16 +434,22 @@ func exposeCmd() *cobra.Command {
 				return fmt.Errorf("invalid port: %s", args[1])
 			}
 
-			name := args[0][:8]
+			name := defaultExposeName(args[0])
 			if len(args) > 2 {
 				name = args[2]
 			}
 
-			// Call control API
-			body := fmt.Sprintf(`{"sandbox_id":"%s","port":%d,"name":"%s"}`, args[0], port, name)
+			body, err := json.Marshal(map[string]any{
+				"sandbox_id": args[0],
+				"port":       port,
+				"name":       name,
+			})
+			if err != nil {
+				return err
+			}
 			url := cfg.Control + "/control/v1/expose"
 
-			resp, err := makeControlRequest("POST", url, body, cfg.APIKey)
+			resp, err := makeControlRequest("POST", url, string(body), cfg.APIKey)
 			if err != nil {
 				return err
 			}
@@ -473,17 +471,7 @@ func openhandsCmd() *cobra.Command {
 
 			url := cfg.OpenHands
 			ui.Ok("Opening %s", url)
-
-			var openCmd *exec.Cmd
-			switch runtime.GOOS {
-			case "darwin":
-				openCmd = exec.Command("open", url)
-			case "linux":
-				openCmd = exec.Command("xdg-open", url)
-			default:
-				openCmd = exec.Command("cmd", "/c", "start", url)
-			}
-			return openCmd.Start()
+			return openBrowser(url)
 		},
 	}
 }

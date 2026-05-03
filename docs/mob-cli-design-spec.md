@@ -139,9 +139,11 @@ mob-sandbox · 203.0.113.50 · IP mode · up 3d 14h
 
 运行在开发者笔记本上。只需要 server URL + API key。
 
-### 命令（9 条）
+### 命令
 
 ```
+mob                                 打开交互式 TUI（默认入口）
+mob tui                             显式打开交互式 TUI
 mob init                            连接服务器，自动探测并保存配置
 mob create                          创建沙盒，打印 ID
 mob ssh [id]                        SSH 进沙盒（不给 id = 自动创建新的再进）
@@ -152,6 +154,21 @@ mob url <id> <port>                 拿一个 1 小时签名 URL（方案 B，�
 mob expose <id> <port> [name]       永久子域名路由（方案 C，域名模式）
 mob openhands                       打开 OpenHands 浏览器页
 ```
+
+### mob TUI
+
+`mob` 无参数会进入基于 Charmbracelet Bubble Tea 的全屏交互界面，适合连续操作而不是反复退出 shell 输入单次命令。
+
+核心能力：
+- 沙盒列表：启动时加载，`r` 刷新，上下键选择。
+- 会话：`enter`/`s` SSH 到当前沙盒，`a` 运行 Claude Code；远程会话退出后回到 TUI。
+- 创建/删除：`c`/`n` 创建沙盒，`d` 删除当前沙盒（需要确认）。
+- 端口：`f` 创建 localhost SSH 隧道并保持在 TUI 中，`x` 关闭隧道。
+- 域名模式：`u` 生成 1 小时预览 URL，`e` 创建永久子域名路由。
+- 集成：`o` 打开 OpenHands，`p` 执行 power status/start/stop/reboot。
+- 帮助/退出：`?` 展开快捷键，`q` 退出并清理 TUI 内创建的隧道。
+
+TUI 不替代单次命令；所有原有命令仍可用于脚本和快速操作。
 
 ### 配置：`~/.config/mob/config.yaml`
 

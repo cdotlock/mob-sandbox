@@ -36,9 +36,11 @@ mob-server daemon
 
 ### mob — 客户端 CLI
 
-运行在开发者笔记本上，一键开沙盒 + VPS 开关机。
+运行在开发者笔记本上，一键开沙盒 + VPS 开关机。无参数运行 `mob` 会进入交互式 TUI；也可以用下面的单次命令直接操作。
 
 ```bash
+mob                               # 打开交互式 TUI
+mob tui                           # 显式打开交互式 TUI
 mob init                          # 连接服务器
 mob create                        # 创建沙盒
 mob ssh [id]                      # SSH 进沙盒（不给 id 自动创建）
@@ -56,6 +58,8 @@ mob power reboot                  # 重启
 mob power status                  # 查看 VPS 状态
 ```
 
+TUI 基于 Charmbracelet Bubble Tea 构建，支持在同一个界面里刷新沙盒、创建沙盒、进入 SSH/Claude Code、保持 localhost 隧道、生成预览 URL、创建永久路由、删除沙盒、打开 OpenHands 和调用 VPS power 控制。SSH/Claude Code 会临时接管终端，退出远程会话后自动回到 TUI。
+
 ## 两种模式
 
 - **域名模式**: 自动 TLS、预览 URL、永久子域名路由
@@ -68,6 +72,8 @@ mob power status                  # 查看 VPS 状态
 ```bash
 make build          # macOS 二进制
 make build-linux    # Linux amd64 二进制
+make package        # dist/ 下生成 release 资产和 checksums.txt
+make install        # 安装到 /usr/local/bin
 ```
 
 ### 服务端部署
@@ -84,7 +90,7 @@ mob-server init --ssh-host your-server --ssh-key ~/.ssh/id_ed25519
 
 ```bash
 mob init    # 输入服务器地址和 API key
-mob ssh     # 创建沙盒并 SSH 进入
+mob         # 打开 TUI，选择创建沙盒或进入 SSH/Claude Code
 ```
 
 ## 沙盒环境
