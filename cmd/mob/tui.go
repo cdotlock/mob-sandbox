@@ -173,6 +173,11 @@ type browserOpenedMsg struct {
 	err error
 }
 
+type initFinishedMsg struct {
+	cfg *config.ClientConfig
+	err error
+}
+
 type terminalFunc struct {
 	run func() error
 }
@@ -361,6 +366,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.setStatus("ok", "OpenHands opened")
 		}
+	case initFinishedMsg:
+		m.mode = modeDashboard
+		if msg.err != nil {
+			m.setStatus("error", fmt.Sprintf("Init failed: %v", msg.err))
+			return m, nil
+		}
+		m.stopAllForwards()
+		m.cfg = msg.cfg
+		m.client = newClient(msg.cfg)
+		m.focusID = ""
+		return m.withBusy("Refreshing sandboxes", loadSandboxesCmd(m.client))
 	}
 
 	if m.mode == modeBusy {
@@ -404,6 +420,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "r":
 			return m.withBusy("Refreshing sandboxes", loadSandboxesCmd(m.client))
+		case "i":
+			return m.withBusy("Running init", runInitTeaCmd())
 		case "c", "n":
 			return m.withBusy("Creating sandbox", createSandboxCmd(m.cfg, m.client))
 		case "enter", "s":
@@ -467,7 +485,10 @@ func (m tuiModel) headerView() string {
 	if other > 0 {
 		parts = append(parts, fmt.Sprintf("%d changing", other))
 	}
-	return titleStyle.Render("mob") + " " + mutedStyle.Render(strings.Join(parts, " | "))
+	return lipgloss.JoinVertical(lipgloss.Left,
+		logoStyle.Render("Mob SandBox"),
+		mutedStyle.Render(strings.Join(parts, " | ")),
+	)
 }
 
 func (m tuiModel) emptyStateView() string {
@@ -475,6 +496,7 @@ func (m tuiModel) emptyStateView() string {
 		sectionStyle.Render("No sandboxes"),
 		"",
 		"Press n to create a sandbox.",
+		"Press i to initialize or change config.",
 		"Press r to refresh.",
 	}
 	return emptyStyle.Width(maxInt(40, m.list.Width()-4)).Render(strings.Join(lines, "\n"))
@@ -498,22 +520,34 @@ func (m tuiModel) sideView() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(sectionStyle.Render("Actions"))
+	b.WriteString(primarySectionStyle.Render("Primary"))
 	b.WriteString("\n")
-	actions := []string{
+	primaryActions := []string{
 		"enter  SSH",
 		"a      Claude Code",
 		"n      create sandbox",
 		"f      forward port",
-		"x      stop tunnel",
+	}
+	for _, line := range primaryActions {
+		b.WriteString("  ")
+		b.WriteString(primaryActionStyle.Render(line))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(secondarySectionStyle.Render("Secondary"))
+	b.WriteString("\n")
+	secondaryActions := []string{
 		"/      filter list",
 		"r      refresh",
+		"i      init config",
+		"x      stop tunnel",
 		"q      quit",
 	}
 	if !m.showHelp {
-		actions = append(actions, "?      more")
+		secondaryActions = append(secondaryActions, "?      more")
 	} else {
-		actions = append(actions,
+		secondaryActions = append(secondaryActions,
 			"u      preview URL",
 			"e      expose route",
 			"d      delete",
@@ -522,9 +556,9 @@ func (m tuiModel) sideView() string {
 			"?      less",
 		)
 	}
-	for _, line := range actions {
+	for _, line := range secondaryActions {
 		b.WriteString("  ")
-		b.WriteString(line)
+		b.WriteString(secondaryActionStyle.Render(line))
 		b.WriteString("\n")
 	}
 
@@ -985,6 +1019,24 @@ func powerTeaCmd(action string, cfg *config.ClientConfig) tea.Cmd {
 	}
 }
 
+func runInitTeaCmd() tea.Cmd {
+	return tea.Exec(terminalFunc{run: func() error {
+		return runInitInteractive(bufio.NewReader(os.Stdin))
+	}}, func(err error) tea.Msg {
+		if err != nil {
+			return initFinishedMsg{err: err}
+		}
+		cfg, err := loadCfg()
+		if err != nil {
+			return initFinishedMsg{err: err}
+		}
+		if cfg.SSHPort == 0 {
+			cfg.SSHPort = 2222
+		}
+		return initFinishedMsg{cfg: cfg}
+	})
+}
+
 func ensureSandboxReadySilent(client *daytona.Client, sandboxID string) error {
 	sb, err := getSandboxWithRetry(client, sandboxID, 3, 2*time.Second)
 	if err != nil {
@@ -1052,9 +1104,14 @@ func stateBadge(state string) string {
 
 var (
 	appStyle                = lipgloss.NewStyle().Padding(1, 2)
+	logoStyle               = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("42")).Padding(0, 1)
 	titleStyle              = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
 	mutedStyle              = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	sectionStyle            = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
+	primarySectionStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+	secondarySectionStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245"))
+	primaryActionStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	secondaryActionStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
 	panelStyle              = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(1, 2)
 	promptStyle             = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("42")).Padding(1, 2)
 	emptyStyle              = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(2, 3)
