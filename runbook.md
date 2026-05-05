@@ -87,6 +87,47 @@ curl -s "$BASE/health"
 curl -s -X POST "$BASE/validate" -F "script=@testdata/minimal.md"
 ```
 
+## Validated MoonShort deployment
+
+The MoonShort FastAPI deployment validated on May 5, 2026 used:
+
+- Server: `47.254.93.15`
+- Sandbox: `ca4cfdc5-a605-40be-ac1a-dc0df4fbe9f8`
+- Sandbox service port: `8888`
+- Public route: `http://moonshort.47.254.93.15.sslip.io:9876`
+- Health path: `/health`
+- Route type: permanent `mob expose`
+
+The route was registered with service recovery enabled:
+
+```bash
+mob expose ca4cfdc5-a605-40be-ac1a-dc0df4fbe9f8 8888 moonshort \
+  --health-path /health \
+  --start-command 'cd /home/daytona/moonshort-script && nohup python3 -m uvicorn api_server:app --host 0.0.0.0 --port 8888 > api_server.log 2>&1 < /dev/null &'
+```
+
+Use this as the external E2E checklist before calling a route ready:
+
+```bash
+BASE=http://moonshort.47.254.93.15.sslip.io:9876
+curl -s -i "$BASE/health"
+curl -s -i -X POST "$BASE/validate" -F "script=@testdata/minimal.md"
+curl -s -w '\nHTTP_STATUS:%{http_code}\n' -X POST "$BASE/compile" -F "script=@testdata/minimal.md" -o /tmp/moonshort-compiled.json
+curl -s -i -X POST "$BASE/decompile" -F "compiled=@/tmp/moonshort-compiled.json"
+```
+
+For service recovery, stop the uvicorn process inside the sandbox, wait for one guardian interval, then repeat `/health` and at least one real business endpoint such as `/validate`. A working recovery should show a new uvicorn process and return `200` from the stable public URL.
+
+## Lessons learned
+
+- Do not document or share Daytona preview URLs as stable API URLs. They can depend on short-lived browser/session state and may later return redirects, EOF, or `404`.
+- In IP mode, use the `mob-server` stable route: `http://<name>.<server-ip>.sslip.io:<control-port>`. This keeps the public URL stable without DNS provider setup.
+- Always re-register important routes with `--health-path` and `--start-command`; an existing route without those fields can expose traffic but cannot self-heal the sandbox service.
+- Validate externally from outside the sandbox. A local `curl http://127.0.0.1:<port>/health` only proves the service is alive, not that public routing works.
+- Test one real business endpoint, not only `/health`. For MoonShort, `/validate`, `/compile`, and `/decompile` prove the HTTP wrapper, multipart upload, `mss` binary, and reverse proxy path all work together.
+- Treat a transient `502` as an upstream readiness signal first. Check the sandbox service, wait for the guardian interval, then inspect `journalctl -u mob-server` if the route does not recover.
+- Use `mob url` for 30-day preview routes and `mob expose` for permanent public routes. Both work in IP mode and domain mode.
+
 ## Expose in domain mode
 
 Domain mode requires the server to have:
