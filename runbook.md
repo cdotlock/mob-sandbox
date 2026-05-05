@@ -7,6 +7,7 @@ This runbook describes how to use a mob sandbox to run a remote service and expo
 - `mob forward` is local only. It opens `localhost:<random>` on your laptop and is not suitable for sharing.
 - `mob url` creates a stable preview route. By default it lives for 30 days. Use `--permanent` for a non-expiring route.
 - `mob expose` creates a permanent public route.
+- `mob url` and `mob expose` can include `--health-path` and `--start-command`. The server guardian checks active routes and restarts the sandbox service when the health check fails.
 - In domain mode, routes use `https://<name>.<domain>`.
 - In IP mode, routes use `http://<name>.<server-ip>.sslip.io:<control-port>`.
 
@@ -43,19 +44,25 @@ IP mode requires no DNS provider. It uses `sslip.io` to resolve a name containin
 Create a 30-day preview route:
 
 ```bash
-mob url <sandbox-id> 8888 --name moonshort
+mob url <sandbox-id> 8888 --name moonshort \
+  --health-path /health \
+  --start-command 'cd /home/daytona/moonshort-script && nohup python3 -m uvicorn api_server:app --host 0.0.0.0 --port 8888 > api_server.log 2>&1 < /dev/null &'
 ```
 
 Create a permanent route:
 
 ```bash
-mob url <sandbox-id> 8888 --name moonshort --permanent
+mob url <sandbox-id> 8888 --name moonshort --permanent \
+  --health-path /health \
+  --start-command 'cd /home/daytona/moonshort-script && nohup python3 -m uvicorn api_server:app --host 0.0.0.0 --port 8888 > api_server.log 2>&1 < /dev/null &'
 ```
 
 Or use the explicit permanent expose command:
 
 ```bash
-mob expose <sandbox-id> 8888 moonshort
+mob expose <sandbox-id> 8888 moonshort \
+  --health-path /health \
+  --start-command 'cd /home/daytona/moonshort-script && nohup python3 -m uvicorn api_server:app --host 0.0.0.0 --port 8888 > api_server.log 2>&1 < /dev/null &'
 ```
 
 Example output in IP mode:
@@ -66,7 +73,9 @@ Example output in IP mode:
   "sandbox_id": "ca4cfdc5-a605-40be-ac1a-dc0df4fbe9f8",
   "port": 8888,
   "subdomain": "moonshort.47.254.93.15.sslip.io",
-  "url": "http://moonshort.47.254.93.15.sslip.io:9876"
+  "url": "http://moonshort.47.254.93.15.sslip.io:9876",
+  "start_command": "cd /home/daytona/moonshort-script && nohup python3 -m uvicorn api_server:app --host 0.0.0.0 --port 8888 > api_server.log 2>&1 < /dev/null &",
+  "health_path": "/health"
 }
 ```
 
@@ -155,6 +164,19 @@ If the public route returns `502`, first check the service inside the sandbox:
 mob ssh <sandbox-id>
 curl -s -i http://127.0.0.1:8888/health
 tail -100 ~/moonshort-script/api_server.log
+```
+
+If the route was created with `--health-path` and `--start-command`, `mob-server daemon` should repair it automatically. Wait for one guardian interval, then retry:
+
+```bash
+sleep 35
+curl -s -i http://moonshort.<server-ip>.sslip.io:9876/health
+```
+
+If it still fails, check the server daemon logs:
+
+```bash
+ssh root@<server> journalctl -u mob-server -n 100 --no-pager
 ```
 
 If the route returns `404`, confirm the route exists:
