@@ -150,8 +150,8 @@ mob ssh [id]                        SSH 进沙盒（不给 id = 自动创建新�
 mob ps                              列出我的沙盒
 mob rm <id>                         删除沙盒
 mob forward <id> <port>             SSH 隧道转发到 localhost（方案 A）
-mob url <id> <port>                 拿一个 1 小时签名 URL（方案 B，域名模式）
-mob expose <id> <port> [name]       永久子域名路由（方案 C，域名模式）
+mob url <id> <port>                 创建稳定预览 URL（IP 模式走 sslip.io，域名模式走 TLS 子域名）
+mob expose <id> <port> [name]       永久稳定 URL（IP 模式走 sslip.io，域名模式走 TLS 子域名）
 mob openhands                       打开 OpenHands 浏览器页
 ```
 
@@ -164,7 +164,7 @@ mob openhands                       打开 OpenHands 浏览器页
 - 会话：`enter`/`s` SSH 到当前沙盒，`a` 运行 Claude Code；远程会话退出后回到 TUI。
 - 创建/删除：`c`/`n` 创建沙盒，`d` 删除当前沙盒（需要确认）。
 - 端口：`f` 创建 localhost SSH 隧道并保持在 TUI 中，`x` 关闭隧道。
-- 域名模式：`u` 生成 1 小时预览 URL，`e` 创建永久子域名路由。
+- 稳定 URL：`u` 生成预览 URL，`e` 创建永久路由；IP 模式返回 `http://<name>.<server-ip>.sslip.io:9876`，域名模式返回 `https://<name>.<domain>`。
 - 集成：`o` 打开 OpenHands，`p` 执行 power status/start/stop/reboot。
 - 帮助/退出：`?` 展开快捷键，`q` 退出并清理 TUI 内创建的隧道。
 
@@ -222,14 +222,18 @@ $ mob forward a1b2c3d4 3000
   ✓ http://localhost:38291 → sandbox:3000 (Ctrl+C 断开)
 
 $ mob url a1b2c3d4 3000
-  https://3000-poxvlfmcexwvi69b.node.proxy.example.com  (有效期 1h)
+  http://p-a1b2c3d4-3000.203.0.113.50.sslip.io:9876  (IP 模式，默认有效期 30 天)
 
 $ mob expose a1b2c3d4 3000 mydemo
-  ✓ https://mydemo.example.com → sandbox a1b2c3d4:3000  (永久)
+  http://mydemo.203.0.113.50.sslip.io:9876  (IP 模式，永久)
+
+$ mob expose a1b2c3d4 8888 moonshort \
+    --health-path /health \
+    --start-command 'cd /home/daytona/moonshort-script; nohup python3 -m uvicorn api_server:app --host 0.0.0.0 --port 8888 > api_server.log 2>&1 &'
+  http://moonshort.203.0.113.50.sslip.io:9876
 ```
 
-`url` 在 IP 模式下会报错：`Use mob forward instead (IP mode)`。  
-`expose` 在 IP 模式下报错：`Requires domain mode`。
+`mob-server daemon` 对非过期 expose 路由做守护：sandbox 停止时自动 start；端口不可达且路由配置了 `start_command` 时，通过 Daytona SSH gateway 在 sandbox 内执行启动命令；配置了 `health_path` 时用该 HTTP 路径判断服务是否恢复。
 
 ### mob openhands
 

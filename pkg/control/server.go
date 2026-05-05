@@ -51,20 +51,24 @@ type Options struct {
 }
 
 type Route struct {
-	Name      string     `json:"name" yaml:"name"`
-	SandboxID string     `json:"sandbox_id" yaml:"sandbox_id"`
-	Port      int        `json:"port" yaml:"port"`
-	Subdomain string     `json:"subdomain,omitempty" yaml:"subdomain,omitempty"`
-	URL       string     `json:"url" yaml:"url"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty" yaml:"expires_at,omitempty"`
+	Name         string     `json:"name" yaml:"name"`
+	SandboxID    string     `json:"sandbox_id" yaml:"sandbox_id"`
+	Port         int        `json:"port" yaml:"port"`
+	Subdomain    string     `json:"subdomain,omitempty" yaml:"subdomain,omitempty"`
+	URL          string     `json:"url" yaml:"url"`
+	StartCommand string     `json:"start_command,omitempty" yaml:"start_command,omitempty"`
+	HealthPath   string     `json:"health_path,omitempty" yaml:"health_path,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty" yaml:"expires_at,omitempty"`
 }
 
 type ExposeRequest struct {
-	SandboxID  string `json:"sandbox_id"`
-	Port       int    `json:"port"`
-	Name       string `json:"name"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
-	Permanent  bool   `json:"permanent,omitempty"`
+	SandboxID    string `json:"sandbox_id"`
+	Port         int    `json:"port"`
+	Name         string `json:"name"`
+	TTLSeconds   int    `json:"ttl_seconds,omitempty"`
+	Permanent    bool   `json:"permanent,omitempty"`
+	StartCommand string `json:"start_command,omitempty"`
+	HealthPath   string `json:"health_path,omitempty"`
 }
 
 type routeStore struct {
@@ -124,6 +128,8 @@ func NewServerWithOptions(opts Options) *Server {
 }
 
 func (s *Server) Start() error {
+	go s.guardExposures(context.Background())
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /control/v1/expose", s.withAuth(s.handleCreateExpose))
 	mux.HandleFunc("GET /control/v1/expose", s.withAuth(s.handleListExpose))
@@ -219,6 +225,11 @@ func (s *Server) handlePublicProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "exposure expired", http.StatusGone)
 		return
 	}
+	if err := s.ensureRouteReady(r.Context(), route); err != nil {
+		log.Printf("expose proxy %s -> %s:%d not ready: %v", route.Name, route.SandboxID, route.Port, err)
+		http.Error(w, "sandbox upstream unavailable", http.StatusBadGateway)
+		return
+	}
 
 	target := &url.URL{Scheme: "http", Host: "sandbox.internal"}
 	proxy := httputil.NewSingleHostReverseProxy(target)
@@ -247,11 +258,13 @@ func (s *Server) handlePublicProxy(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) addRoute(req ExposeRequest) (Route, error) {
 	route := Route{
-		Name:      req.Name,
-		SandboxID: req.SandboxID,
-		Port:      req.Port,
-		Subdomain: s.subdomain(req.Name),
-		URL:       s.publicURL(req.Name),
+		Name:         req.Name,
+		SandboxID:    req.SandboxID,
+		Port:         req.Port,
+		Subdomain:    s.subdomain(req.Name),
+		URL:          s.publicURL(req.Name),
+		StartCommand: strings.TrimSpace(req.StartCommand),
+		HealthPath:   strings.TrimSpace(req.HealthPath),
 	}
 	if !req.Permanent && req.TTLSeconds > 0 {
 		expiresAt := time.Now().Add(time.Duration(req.TTLSeconds) * time.Second)
@@ -394,11 +407,24 @@ func (s *Server) removeTraefikRoute(name string) error {
 }
 
 func (s *Server) dialSandbox(ctx context.Context, route Route) (net.Conn, error) {
+	client, err := s.sshClientForSandbox(ctx, route.SandboxID)
+	if err != nil {
+		return nil, err
+	}
+	upstream, err := client.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", route.Port))
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("sandbox dial: %w", err)
+	}
+	return &sshBackedConn{Conn: upstream, client: client}, nil
+}
+
+func (s *Server) sshClientForSandbox(ctx context.Context, sandboxID string) (*ssh.Client, error) {
 	if s.daytona == nil {
 		return nil, errors.New("daytona client not configured")
 	}
 
-	access, err := s.daytona.GetSSHAccess(route.SandboxID)
+	access, err := s.daytona.GetSSHAccess(sandboxID)
 	if err != nil {
 		return nil, fmt.Errorf("ssh access: %w", err)
 	}
@@ -423,13 +449,7 @@ func (s *Server) dialSandbox(ctx context.Context, route Route) (net.Conn, error)
 		raw.Close()
 		return nil, fmt.Errorf("ssh client: %w", err)
 	}
-	client := ssh.NewClient(conn, chans, reqs)
-	upstream, err := client.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", route.Port))
-	if err != nil {
-		client.Close()
-		return nil, fmt.Errorf("sandbox dial: %w", err)
-	}
-	return &sshBackedConn{Conn: upstream, client: client}, nil
+	return ssh.NewClient(conn, chans, reqs), nil
 }
 
 type sshBackedConn struct {
@@ -564,7 +584,231 @@ func validateExposeRequest(req ExposeRequest) error {
 	if !sandboxIDPattern.MatchString(req.SandboxID) {
 		return fmt.Errorf("invalid sandbox_id")
 	}
+	if strings.Contains(req.StartCommand, "\x00") {
+		return fmt.Errorf("start_command contains a NUL byte")
+	}
+	if len(req.StartCommand) > 4096 {
+		return fmt.Errorf("start_command is too long")
+	}
+	if req.HealthPath != "" && !strings.HasPrefix(req.HealthPath, "/") {
+		return fmt.Errorf("health_path must start with /")
+	}
+	if strings.ContainsAny(req.HealthPath, "\r\n\x00") {
+		return fmt.Errorf("health_path contains invalid characters")
+	}
 	return nil
+}
+
+func (s *Server) guardExposures(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		if err := s.reconcileExposures(ctx); err != nil {
+			log.Printf("expose guardian: %v", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Server) reconcileExposures(ctx context.Context) error {
+	if s.daytona == nil {
+		return nil
+	}
+
+	routes, err := s.activeRoutes()
+	if err != nil {
+		return err
+	}
+	for _, route := range routes {
+		if err := s.ensureRouteReady(ctx, route); err != nil {
+			log.Printf("expose guardian: %s -> %s:%d not ready: %v", route.Name, route.SandboxID, route.Port, err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) activeRoutes() ([]Route, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.loadStore()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	routes := make([]Route, 0, len(store.Routes))
+	for _, route := range store.Routes {
+		if route.ExpiresAt != nil && now.After(*route.ExpiresAt) {
+			continue
+		}
+		routes = append(routes, route)
+	}
+	return routes, nil
+}
+
+func (s *Server) ensureRouteReady(ctx context.Context, route Route) error {
+	if s.daytona == nil {
+		return nil
+	}
+	if err := s.ensureSandboxStarted(ctx, route.SandboxID); err != nil {
+		return err
+	}
+	if ok := s.routeHealthy(ctx, route); ok {
+		return nil
+	}
+	if route.StartCommand == "" {
+		return errors.New("sandbox port is not reachable and no start_command is configured")
+	}
+	if err := s.runSandboxCommand(ctx, route.SandboxID, route.StartCommand); err != nil {
+		if waitErr := s.waitRouteHealthy(ctx, route, 10*time.Second); waitErr == nil {
+			return nil
+		}
+		return fmt.Errorf("start command: %w", err)
+	}
+	return s.waitRouteHealthy(ctx, route, 30*time.Second)
+}
+
+func (s *Server) ensureSandboxStarted(ctx context.Context, sandboxID string) error {
+	sb, err := s.daytona.GetSandbox(sandboxID)
+	if err != nil {
+		return fmt.Errorf("sandbox status: %w", err)
+	}
+	if isSandboxStarted(sb.State) {
+		return nil
+	}
+	log.Printf("expose guardian: starting sandbox %s (%s)", sandboxID, sb.State)
+	if err := s.daytona.StartSandbox(sandboxID); err != nil {
+		return fmt.Errorf("start sandbox: %w", err)
+	}
+	return s.waitSandboxStarted(ctx, sandboxID, 2*time.Minute)
+}
+
+func (s *Server) waitSandboxStarted(ctx context.Context, sandboxID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		sb, err := s.daytona.GetSandbox(sandboxID)
+		if err == nil && isSandboxStarted(sb.State) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return fmt.Errorf("sandbox did not start: %w", err)
+			}
+			return errors.New("sandbox did not start")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func isSandboxStarted(state string) bool {
+	switch strings.ToLower(state) {
+	case "started", "running", "ready":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) routeHealthy(ctx context.Context, route Route) bool {
+	if route.HealthPath != "" {
+		return s.routeHTTPHealthy(ctx, route)
+	}
+
+	conn, err := s.dialSandbox(ctx, route)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	return true
+}
+
+func (s *Server) routeHTTPHealthy(ctx context.Context, route Route) bool {
+	cmd := fmt.Sprintf(
+		"curl -fsS --max-time 3 %s >/dev/null && printf __MOB_HEALTHY__",
+		shellQuote(fmt.Sprintf("http://127.0.0.1:%d%s", route.Port, route.HealthPath)),
+	)
+	output, _ := s.runSandboxCommandOutput(ctx, route.SandboxID, cmd, 8*time.Second)
+	if strings.Contains(output, "__MOB_HEALTHY__") {
+		return true
+	}
+	return false
+}
+
+func (s *Server) waitRouteHealthy(ctx context.Context, route Route, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if s.routeHealthy(ctx, route) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("sandbox port did not become reachable")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func (s *Server) runSandboxCommand(ctx context.Context, sandboxID, command string) error {
+	output, err := s.runSandboxCommandOutput(ctx, sandboxID, command, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(output))
+	}
+	return nil
+}
+
+func (s *Server) runSandboxCommandOutput(ctx context.Context, sandboxID, command string, timeout time.Duration) (string, error) {
+	client, err := s.sshClientForSandbox(ctx, sandboxID)
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer session.Close()
+
+	type result struct {
+		output []byte
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := session.CombinedOutput(command)
+		done <- result{output: out, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		if res.err != nil {
+			return string(res.output), res.err
+		}
+		return string(res.output), nil
+	case <-ctx.Done():
+		_ = session.Close()
+		return "", ctx.Err()
+	case <-time.After(timeout):
+		_ = session.Close()
+		return "", errors.New("command timed out")
+	}
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func forwardedProto(r *http.Request) string {

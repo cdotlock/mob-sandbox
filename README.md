@@ -47,8 +47,8 @@ mob ssh [id]                      # SSH 进沙盒（不给 id 自动创建）
 mob ps                            # 列出沙盒
 mob rm <id>                       # 删除沙盒
 mob forward <id> <port>           # SSH 隧道转发到 localhost
-mob url <id> <port>               # 预览 URL（域名模式）
-mob expose <id> <port> [name]     # 永久子域名路由（域名模式）
+mob url <id> <port>               # 稳定预览 URL
+mob expose <id> <port> [name]     # 永久稳定 URL
 mob openhands                     # 打开 OpenHands 浏览器
 
 mob power init                    # 配置 Cloudflare Worker URL + operator 名
@@ -63,7 +63,7 @@ TUI 基于 Charmbracelet Bubble Tea 构建，支持在同一个界面里刷新�
 ## 两种模式
 
 - **域名模式**: 自动 TLS、预览 URL、永久子域名路由
-- **IP 模式**: 裸 IP 直连，无需域名，用 SSH 隧道转发端口
+- **IP 模式**: 裸 IP 直连，无需域名；稳定 URL 使用 `sslip.io`
 
 ## 快速开始
 
@@ -103,11 +103,19 @@ mob         # 打开 TUI，选择创建沙盒或进入 SSH/Claude Code
 
 ## 端口暴露方案
 
-| 方案 | 命令 | 适用 | 场景 |
-|------|------|------|------|
-| SSH 隧道 | `mob forward` | 所有模式 | 自己看效果 |
-| 预览 URL | `mob url` | 域名模式 | 临时分享 |
-| 永久子域名 | `mob expose` | 域名模式 | 长期对外 |
+| 方案 | 命令 | 适用 | URL 格式 | 场景 |
+|------|------|------|----------|------|
+| SSH 隧道 | `mob forward` | 所有模式 | `http://localhost:<port>` | 自己看效果 |
+| 预览 URL | `mob url` | 所有模式 | IP: `http://<name>.<server-ip>.sslip.io:9876`；域名: `https://<name>.<domain>` | 临时分享 |
+| 永久稳定 URL | `mob expose` | 所有模式 | IP: `http://<name>.<server-ip>.sslip.io:9876`；域名: `https://<name>.<domain>` | 长期对外 |
+
+稳定 URL 可以带服务守护命令。`mob-server daemon` 会自动启动对应 sandbox，并在端口不可达时执行 `--start-command`：
+
+```bash
+mob expose <id> 8888 moonshort \
+  --health-path /health \
+  --start-command 'cd /home/daytona/moonshort-script; nohup python3 -m uvicorn api_server:app --host 0.0.0.0 --port 8888 > api_server.log 2>&1 &'
+```
 
 ## 项目结构
 

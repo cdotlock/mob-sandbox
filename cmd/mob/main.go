@@ -468,9 +468,11 @@ func forwardCmd() *cobra.Command {
 
 func urlCmd() *cobra.Command {
 	var (
-		name      string
-		ttl       time.Duration
-		permanent bool
+		name         string
+		ttl          time.Duration
+		permanent    bool
+		startCommand string
+		healthPath   string
 	)
 
 	cmd := &cobra.Command{
@@ -497,13 +499,20 @@ func urlCmd() *cobra.Command {
 			if !permanent {
 				ttlSeconds = int(ttl.Seconds())
 			}
-			body, err := json.Marshal(map[string]any{
+			req := map[string]any{
 				"sandbox_id":  args[0],
 				"port":        port,
 				"name":        routeName,
 				"ttl_seconds": ttlSeconds,
 				"permanent":   permanent,
-			})
+			}
+			if startCommand != "" {
+				req["start_command"] = startCommand
+			}
+			if healthPath != "" {
+				req["health_path"] = healthPath
+			}
+			body, err := json.Marshal(req)
 			if err != nil {
 				return err
 			}
@@ -519,11 +528,18 @@ func urlCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Route name (defaults to p-<sandbox>-<port>)")
 	cmd.Flags().DurationVar(&ttl, "ttl", 30*24*time.Hour, "Preview lifetime, e.g. 720h or 30m")
 	cmd.Flags().BoolVar(&permanent, "permanent", false, "Create a non-expiring preview URL")
+	cmd.Flags().StringVar(&startCommand, "start-command", "", "Command mob-server runs inside the sandbox when the exposed port is down")
+	cmd.Flags().StringVar(&healthPath, "health-path", "", "HTTP path used to verify the exposed service, e.g. /health")
 	return cmd
 }
 
 func exposeCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		startCommand string
+		healthPath   string
+	)
+
+	cmd := &cobra.Command{
 		Use:   "expose <id> <port> [name]",
 		Short: "Create a permanent public route",
 		Args:  cobra.RangeArgs(2, 3),
@@ -543,12 +559,19 @@ func exposeCmd() *cobra.Command {
 				name = args[2]
 			}
 
-			body, err := json.Marshal(map[string]any{
+			req := map[string]any{
 				"sandbox_id": args[0],
 				"port":       port,
 				"name":       name,
 				"permanent":  true,
-			})
+			}
+			if startCommand != "" {
+				req["start_command"] = startCommand
+			}
+			if healthPath != "" {
+				req["health_path"] = healthPath
+			}
+			body, err := json.Marshal(req)
 			if err != nil {
 				return err
 			}
@@ -562,6 +585,9 @@ func exposeCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&startCommand, "start-command", "", "Command mob-server runs inside the sandbox when the exposed port is down")
+	cmd.Flags().StringVar(&healthPath, "health-path", "", "HTTP path used to verify the exposed service, e.g. /health")
+	return cmd
 }
 
 func openhandsCmd() *cobra.Command {
