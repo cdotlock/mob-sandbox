@@ -245,11 +245,21 @@ func daemonCmd() *cobra.Command {
 				return fmt.Errorf("load config: %w", err)
 			}
 
-			// Start control API in background
-			if cfg.Mode == "domain" && cfg.Domain != "" {
-				ctrlSrv := control.NewServer(cfg.Ports.Control, cfg.Domain)
-				go ctrlSrv.Start()
+			mode := cfg.Mode
+			if mode == "" {
+				mode = "ip"
 			}
+			ctrlSrv := control.NewServerWithOptions(control.Options{
+				Port:       cfg.Ports.Control,
+				Mode:       mode,
+				Domain:     cfg.Domain,
+				PublicIP:   cfg.PublicIP,
+				APIKey:     cfg.APIKey,
+				DaytonaURL: fmt.Sprintf("http://127.0.0.1:%d", cfg.Ports.API),
+				SSHHost:    "127.0.0.1",
+				SSHPort:    cfg.Ports.SSH,
+			})
+			go ctrlSrv.Start()
 
 			g := guardian.New(localRun)
 			g.Run()

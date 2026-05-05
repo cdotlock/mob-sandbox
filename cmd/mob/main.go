@@ -467,17 +467,20 @@ func forwardCmd() *cobra.Command {
 }
 
 func urlCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		name      string
+		ttl       time.Duration
+		permanent bool
+	)
+
+	cmd := &cobra.Command{
 		Use:   "url <id> <port>",
-		Short: "Get preview URL (Scheme B, domain mode)",
+		Short: "Create a stable preview URL (30 days by default)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadCfg()
 			if err != nil {
 				return err
-			}
-			if cfg.Mode == "ip" {
-				return fmt.Errorf("preview URLs require domain mode — use 'mob forward' instead")
 			}
 
 			port, err := strconv.Atoi(args[1])
@@ -485,11 +488,38 @@ func urlCmd() *cobra.Command {
 				return fmt.Errorf("invalid port: %s", args[1])
 			}
 
-			previewURL := newClient(cfg).BuildPreviewURL(args[0], port, previewDomain(cfg))
-			fmt.Printf("  %s  (auth via cookie, 1h)\n", previewURL)
+			routeName := name
+			if routeName == "" {
+				routeName = fmt.Sprintf("p-%s-%d", defaultExposeName(args[0]), port)
+			}
+
+			ttlSeconds := 0
+			if !permanent {
+				ttlSeconds = int(ttl.Seconds())
+			}
+			body, err := json.Marshal(map[string]any{
+				"sandbox_id":  args[0],
+				"port":        port,
+				"name":        routeName,
+				"ttl_seconds": ttlSeconds,
+				"permanent":   permanent,
+			})
+			if err != nil {
+				return err
+			}
+
+			resp, err := makeControlRequest("POST", cfg.Control+"/control/v1/expose", string(body), cfg.APIKey)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("  %s\n", resp)
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&name, "name", "", "Route name (defaults to p-<sandbox>-<port>)")
+	cmd.Flags().DurationVar(&ttl, "ttl", 30*24*time.Hour, "Preview lifetime, e.g. 720h or 30m")
+	cmd.Flags().BoolVar(&permanent, "permanent", false, "Create a non-expiring preview URL")
+	return cmd
 }
 
 func exposeCmd() *cobra.Command {
@@ -501,9 +531,6 @@ func exposeCmd() *cobra.Command {
 			cfg, err := loadCfg()
 			if err != nil {
 				return err
-			}
-			if cfg.Mode == "ip" {
-				return fmt.Errorf("expose requires domain mode")
 			}
 
 			port, err := strconv.Atoi(args[1])
@@ -520,6 +547,7 @@ func exposeCmd() *cobra.Command {
 				"sandbox_id": args[0],
 				"port":       port,
 				"name":       name,
+				"permanent":  true,
 			})
 			if err != nil {
 				return err

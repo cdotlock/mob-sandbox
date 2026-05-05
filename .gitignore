@@ -5,6 +5,7 @@ dist/
 .env.*
 !.env.example
 .DS_Store
+.gocache/
 node_modules/
 .wrangler/
 db/

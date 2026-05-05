@@ -64,6 +64,7 @@ func (p *Porkbun) EnsureRecords(domain, ip string) error {
 		{"*", "A", ip},
 		{"daytona", "A", ip},
 		{"openhands", "A", ip},
+		{"control", "A", ip},
 		{"*.proxy", "A", ip},
 		{"*.node.proxy", "A", ip},
 	}
@@ -104,14 +105,15 @@ func (p *Porkbun) createRecord(domain, sub, rtype, content string) error {
 
 type Manual struct{}
 
-func (m *Manual) Name() string                              { return "manual" }
-func (m *Manual) TraefikEnvBlock() string                   { return "" }
+func (m *Manual) Name() string            { return "manual" }
+func (m *Manual) TraefikEnvBlock() string { return "" }
 func (m *Manual) EnsureRecords(domain, ip string) error {
 	fmt.Printf("\n  Manual DNS setup required:\n")
 	fmt.Printf("    %s        → A → %s\n", domain, ip)
 	fmt.Printf("    *.%s      → A → %s\n", domain, ip)
 	fmt.Printf("    daytona.%s → A → %s\n", domain, ip)
 	fmt.Printf("    openhands.%s → A → %s\n", domain, ip)
+	fmt.Printf("    control.%s → A → %s\n", domain, ip)
 	fmt.Printf("    *.proxy.%s → A → %s\n", domain, ip)
 	fmt.Printf("    *.node.proxy.%s → A → %s\n", domain, ip)
 	fmt.Printf("\n  Press Enter when DNS is configured...")

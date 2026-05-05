@@ -1,4 +1,4 @@
-VERSION ?= 0.1.1
+VERSION ?= 0.1.2
 LDFLAGS := -s -w -X github.com/cdotlock/mob-sandbox/pkg/config.Version=$(VERSION)
 HOST_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 HOST_ARCH := $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')

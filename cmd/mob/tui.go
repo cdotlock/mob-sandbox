@@ -187,6 +187,7 @@ type forwardStartedMsg struct {
 }
 
 type exposeCreatedMsg struct {
+	label    string
 	response string
 	err      error
 }
@@ -365,8 +366,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setStatus("ok", fmt.Sprintf("http://localhost:%d -> %s:%d", msg.forward.LocalPort, shortID(msg.forward.SandboxID), msg.forward.RemotePort))
 	case exposeCreatedMsg:
 		m.mode = modeDashboard
+		label := msg.label
+		if label == "" {
+			label = "Expose"
+		}
 		if msg.err != nil {
-			m.setStatus("error", fmt.Sprintf("Expose failed: %v", msg.err))
+			m.setStatus("error", fmt.Sprintf("%s failed: %v", label, msg.err))
 			return m, nil
 		}
 		m.setStatus("ok", strings.TrimSpace(msg.response))
@@ -783,8 +788,7 @@ func (m tuiModel) submitPrompt() (tea.Model, tea.Cmd) {
 			m.setStatus("error", err.Error())
 			return m, nil
 		}
-		url := m.client.BuildPreviewURL(prompt.sandboxID, port, previewDomain(m.cfg))
-		m.setStatus("ok", url+"  (auth via cookie, 1h)")
+		return m.withBusy("Creating preview URL", createPreviewCmd(m.cfg, prompt.sandboxID, port))
 	case promptExposePort:
 		port, err := parsePort(value)
 		if err != nil {
@@ -860,10 +864,6 @@ func (m tuiModel) prepareSSH(claude bool) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) askPort(kind promptKind, title, help string) (tea.Model, tea.Cmd) {
-	if (kind == promptURLPort || kind == promptExposePort) && m.cfg.Mode == "ip" {
-		m.setStatus("error", "Domain mode is required. Use forward in IP mode.")
-		return m, nil
-	}
 	id := m.selectedSandboxID()
 	if id == "" {
 		m.setStatus("error", "No sandbox selected. Press c to create one.")
@@ -964,9 +964,9 @@ func (m tuiModel) executeAction(action menuActionID) (tea.Model, tea.Cmd) {
 	case actionInit:
 		return m.withBusy("Running init", runInitTeaCmd())
 	case actionURL:
-		return m.askPort(promptURLPort, "Preview URL", "Generate a one-hour Daytona preview URL")
+		return m.askPort(promptURLPort, "Preview URL", "Create a stable 30-day preview URL")
 	case actionExpose:
-		return m.askPort(promptExposePort, "Expose route", "Create a permanent subdomain route")
+		return m.askPort(promptExposePort, "Expose route", "Create a permanent public route")
 	case actionDelete:
 		return m.askDelete()
 	case actionOpenHands:
@@ -1239,12 +1239,29 @@ func createExposeCmd(cfg *config.ClientConfig, sandboxID string, port int, name 
 			"sandbox_id": sandboxID,
 			"port":       port,
 			"name":       name,
+			"permanent":  true,
 		})
 		if err != nil {
-			return exposeCreatedMsg{err: err}
+			return exposeCreatedMsg{label: "Expose", err: err}
 		}
 		resp, err := makeControlRequest("POST", cfg.Control+"/control/v1/expose", string(body), cfg.APIKey)
-		return exposeCreatedMsg{response: resp, err: err}
+		return exposeCreatedMsg{label: "Expose", response: resp, err: err}
+	}
+}
+
+func createPreviewCmd(cfg *config.ClientConfig, sandboxID string, port int) tea.Cmd {
+	return func() tea.Msg {
+		body, err := json.Marshal(map[string]any{
+			"sandbox_id":  sandboxID,
+			"port":        port,
+			"name":        fmt.Sprintf("p-%s-%d", defaultExposeName(sandboxID), port),
+			"ttl_seconds": int((30 * 24 * time.Hour).Seconds()),
+		})
+		if err != nil {
+			return exposeCreatedMsg{label: "Preview", err: err}
+		}
+		resp, err := makeControlRequest("POST", cfg.Control+"/control/v1/expose", string(body), cfg.APIKey)
+		return exposeCreatedMsg{label: "Preview", response: resp, err: err}
 	}
 }
 

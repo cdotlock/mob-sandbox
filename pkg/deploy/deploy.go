@@ -293,6 +293,7 @@ func (d *Deployer) step10GenerateCompose() error {
 		routesData := map[string]string{
 			"Domain":        d.cfg.Domain,
 			"DomainEscaped": strings.ReplaceAll(d.cfg.Domain, ".", "\\."),
+			"ControlPort":   fmt.Sprintf("%d", d.cfg.Ports.Control),
 		}
 		routesYml, err := embedded.RenderTemplate("traefik-routes.yml.tmpl", routesData)
 		if err != nil {
@@ -608,7 +609,7 @@ WantedBy=multi-user.target
 		return err
 	}
 
-	script := `systemctl daemon-reload && systemctl enable mob-server.service`
+	script := `systemctl daemon-reload && systemctl enable mob-server.service && systemctl restart mob-server.service`
 	_, err := d.sshRun(script)
 	return err
 }
