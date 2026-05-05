@@ -525,7 +525,7 @@ func urlCmd() *cobra.Command {
 func exposeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "expose <id> <port> [name]",
-		Short: "Permanent subdomain route (Scheme C, domain mode)",
+		Short: "Create a permanent public route",
 		Args:  cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadCfg()
