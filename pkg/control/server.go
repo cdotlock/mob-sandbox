@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cdotlock/mob-sandbox/pkg/daytona"
@@ -35,6 +37,8 @@ type Server struct {
 	storePath  string
 	daytona    *daytona.Client
 	mu         sync.Mutex
+	tunnelMu   sync.Mutex
+	tunnels    map[string]*routeTunnel
 }
 
 type Options struct {
@@ -75,10 +79,24 @@ type routeStore struct {
 	Routes []Route `yaml:"routes"`
 }
 
+type routeTunnel struct {
+	route     Route
+	listener  net.Listener
+	clients   []*ssh.Client
+	proxy     *httputil.ReverseProxy
+	transport *http.Transport
+	localAddr string
+	next      uint64
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
 var (
 	exposeNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	sandboxIDPattern  = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 )
+
+const routeTunnelClientCount = 6
 
 func NewServer(port int, domain, apiKey string) *Server {
 	return NewServerWithOptions(Options{
@@ -120,6 +138,7 @@ func NewServerWithOptions(opts Options) *Server {
 		sshPort:    opts.SSHPort,
 		routesPath: opts.RoutesPath,
 		storePath:  opts.StorePath,
+		tunnels:    make(map[string]*routeTunnel),
 	}
 	if s.daytonaURL != "" && s.apiKey != "" {
 		s.daytona = daytona.NewClient(s.daytonaURL, s.apiKey)
@@ -225,35 +244,15 @@ func (s *Server) handlePublicProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "exposure expired", http.StatusGone)
 		return
 	}
-	if err := s.ensureRouteReady(r.Context(), route); err != nil {
-		log.Printf("expose proxy %s -> %s:%d not ready: %v", route.Name, route.SandboxID, route.Port, err)
+
+	tunnel, err := s.ensureRouteTunnel(r.Context(), route)
+	if err != nil {
+		log.Printf("expose proxy %s -> %s:%d tunnel unavailable: %v", route.Name, route.SandboxID, route.Port, err)
 		http.Error(w, "sandbox upstream unavailable", http.StatusBadGateway)
 		return
 	}
 
-	target := &url.URL{Scheme: "http", Host: "sandbox.internal"}
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.Transport = &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return s.dialSandbox(ctx, route)
-		},
-		DisableKeepAlives: true,
-	}
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("expose proxy %s -> %s:%d failed: %v", route.Name, route.SandboxID, route.Port, err)
-		http.Error(w, "sandbox upstream unavailable", http.StatusBadGateway)
-	}
-
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.URL.Scheme = "http"
-		req.URL.Host = target.Host
-		req.Host = r.Host
-		req.Header.Set("X-Forwarded-Host", r.Host)
-		req.Header.Set("X-Forwarded-Proto", forwardedProto(r))
-	}
-	proxy.ServeHTTP(w, r)
+	tunnel.proxy.ServeHTTP(w, r)
 }
 
 func (s *Server) addRoute(req ExposeRequest) (Route, error) {
@@ -311,6 +310,7 @@ func (s *Server) removeRoute(name string) error {
 	if err := s.saveStore(store); err != nil {
 		return err
 	}
+	s.closeRouteTunnel(name, nil)
 	return s.removeTraefikRoute(name)
 }
 
@@ -406,6 +406,188 @@ func (s *Server) removeTraefikRoute(name string) error {
 	return s.saveRoutes(routes)
 }
 
+func (s *Server) ensureRouteTunnel(ctx context.Context, route Route) (*routeTunnel, error) {
+	if s.daytona == nil {
+		return nil, errors.New("daytona client not configured")
+	}
+
+	s.tunnelMu.Lock()
+	defer s.tunnelMu.Unlock()
+
+	if existing := s.tunnels[route.Name]; existing != nil && existing.matches(route) {
+		return existing, nil
+	}
+	if existing := s.tunnels[route.Name]; existing != nil {
+		existing.Close()
+		delete(s.tunnels, route.Name)
+	}
+
+	clients, err := s.sshClientsForSandbox(ctx, route.SandboxID, routeTunnelClientCount)
+	if err != nil {
+		return nil, err
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		closeSSHClients(clients)
+		return nil, fmt.Errorf("local tunnel listen: %w", err)
+	}
+
+	tunnel := &routeTunnel{
+		route:     route,
+		listener:  listener,
+		clients:   clients,
+		localAddr: listener.Addr().String(),
+		done:      make(chan struct{}),
+	}
+	tunnel.proxy, tunnel.transport = s.newTunnelProxy(route, tunnel)
+	s.tunnels[route.Name] = tunnel
+
+	go s.serveRouteTunnel(tunnel)
+	go s.keepRouteTunnelAlive(tunnel)
+	log.Printf("expose tunnel %s -> %s:%d listening on %s", route.Name, route.SandboxID, route.Port, tunnel.localAddr)
+	return tunnel, nil
+}
+
+func (s *Server) newTunnelProxy(route Route, tunnel *routeTunnel) (*httputil.ReverseProxy, *http.Transport) {
+	target := &url.URL{Scheme: "http", Host: tunnel.localAddr}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		MaxIdleConns:          512,
+		MaxIdleConnsPerHost:   256,
+		MaxConnsPerHost:       0,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	proxy.Transport = transport
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Printf("expose proxy %s -> %s:%d via %s failed: %v", route.Name, route.SandboxID, route.Port, tunnel.localAddr, err)
+		s.closeRouteTunnel(route.Name, tunnel)
+		http.Error(w, "sandbox upstream unavailable", http.StatusBadGateway)
+	}
+
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalHost := req.Host
+		proto := forwardedProto(req)
+		originalDirector(req)
+		req.Host = originalHost
+		req.Header.Set("X-Forwarded-Host", originalHost)
+		req.Header.Set("X-Forwarded-Proto", proto)
+	}
+	return proxy, transport
+}
+
+func (s *Server) serveRouteTunnel(tunnel *routeTunnel) {
+	for {
+		localConn, err := tunnel.listener.Accept()
+		if err != nil {
+			return
+		}
+		go s.handleRouteTunnelConn(tunnel, localConn)
+	}
+}
+
+func (s *Server) handleRouteTunnelConn(tunnel *routeTunnel, localConn net.Conn) {
+	clients := tunnel.clients
+	if len(clients) == 0 {
+		localConn.Close()
+		s.closeRouteTunnel(tunnel.route.Name, tunnel)
+		return
+	}
+
+	idx := atomic.AddUint64(&tunnel.next, 1)
+	client := clients[int(idx%uint64(len(clients)))]
+	remoteConn, err := client.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", tunnel.route.Port))
+	if err != nil {
+		localConn.Close()
+		log.Printf("expose tunnel %s -> %s:%d dial failed: %v", tunnel.route.Name, tunnel.route.SandboxID, tunnel.route.Port, err)
+		s.closeRouteTunnel(tunnel.route.Name, tunnel)
+		return
+	}
+	copyBidirectional(localConn, remoteConn)
+}
+
+func (s *Server) keepRouteTunnelAlive(tunnel *routeTunnel) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-tunnel.done:
+			return
+		case <-ticker.C:
+			for _, client := range tunnel.clients {
+				_, _, err := client.SendRequest("keepalive@mob-sandbox", true, nil)
+				if err != nil {
+					log.Printf("expose tunnel %s -> %s:%d keepalive failed: %v", tunnel.route.Name, tunnel.route.SandboxID, tunnel.route.Port, err)
+					s.closeRouteTunnel(tunnel.route.Name, tunnel)
+					return
+				}
+			}
+		}
+	}
+}
+
+func copyBidirectional(a, b net.Conn) {
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(a, b)
+		a.Close()
+		b.Close()
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(b, a)
+		a.Close()
+		b.Close()
+		done <- struct{}{}
+	}()
+	<-done
+}
+
+func (s *Server) closeRouteTunnel(name string, expected *routeTunnel) {
+	s.tunnelMu.Lock()
+	tunnel := s.tunnels[name]
+	if tunnel == nil || (expected != nil && tunnel != expected) {
+		s.tunnelMu.Unlock()
+		return
+	}
+	delete(s.tunnels, name)
+	s.tunnelMu.Unlock()
+
+	tunnel.Close()
+}
+
+func (t *routeTunnel) matches(route Route) bool {
+	return t.route.SandboxID == route.SandboxID && t.route.Port == route.Port
+}
+
+func (t *routeTunnel) Close() {
+	t.closeOnce.Do(func() {
+		if t.done != nil {
+			close(t.done)
+		}
+		if t.transport != nil {
+			t.transport.CloseIdleConnections()
+		}
+		if t.listener != nil {
+			t.listener.Close()
+		}
+		closeSSHClients(t.clients)
+	})
+}
+
+func closeSSHClients(clients []*ssh.Client) {
+	for _, client := range clients {
+		if client != nil {
+			client.Close()
+		}
+	}
+}
+
 func (s *Server) dialSandbox(ctx context.Context, route Route) (net.Conn, error) {
 	client, err := s.sshClientForSandbox(ctx, route.SandboxID)
 	if err != nil {
@@ -450,6 +632,27 @@ func (s *Server) sshClientForSandbox(ctx context.Context, sandboxID string) (*ss
 		return nil, fmt.Errorf("ssh client: %w", err)
 	}
 	return ssh.NewClient(conn, chans, reqs), nil
+}
+
+func (s *Server) sshClientsForSandbox(ctx context.Context, sandboxID string, count int) ([]*ssh.Client, error) {
+	if count < 1 {
+		count = 1
+	}
+
+	clients := make([]*ssh.Client, 0, count)
+	for i := 0; i < count; i++ {
+		client, err := s.sshClientForSandbox(ctx, sandboxID)
+		if err != nil {
+			if len(clients) > 0 {
+				log.Printf("expose tunnel %s using %d/%d ssh clients: %v", sandboxID, len(clients), count, err)
+				return clients, nil
+			}
+			closeSSHClients(clients)
+			return nil, err
+		}
+		clients = append(clients, client)
+	}
+	return clients, nil
 }
 
 type sshBackedConn struct {
@@ -659,9 +862,26 @@ func (s *Server) ensureRouteReady(ctx context.Context, route Route) error {
 	if err := s.ensureSandboxStarted(ctx, route.SandboxID); err != nil {
 		return err
 	}
-	if ok := s.routeHealthy(ctx, route); ok {
+
+	tunnel, err := s.ensureRouteTunnel(ctx, route)
+	if err != nil {
+		return err
+	}
+	if s.routeHealthy(ctx, route, tunnel) {
 		return nil
 	}
+
+	// Recreate once before running the start command. This distinguishes a
+	// stale SSH tunnel from an application that is genuinely down.
+	s.closeRouteTunnel(route.Name, tunnel)
+	tunnel, err = s.ensureRouteTunnel(ctx, route)
+	if err != nil {
+		return err
+	}
+	if s.routeHealthy(ctx, route, tunnel) {
+		return nil
+	}
+
 	if route.StartCommand == "" {
 		return errors.New("sandbox port is not reachable and no start_command is configured")
 	}
@@ -719,35 +939,39 @@ func isSandboxStarted(state string) bool {
 	}
 }
 
-func (s *Server) routeHealthy(ctx context.Context, route Route) bool {
-	if route.HealthPath != "" {
-		return s.routeHTTPHealthy(ctx, route)
+func (s *Server) routeHealthy(ctx context.Context, route Route, tunnel *routeTunnel) bool {
+	path := route.HealthPath
+	if path == "" {
+		path = "/"
 	}
 
-	conn, err := s.dialSandbox(ctx, route)
+	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "http://"+tunnel.localAddr+path, nil)
 	if err != nil {
 		return false
 	}
-	defer conn.Close()
-	return true
-}
+	req.Host = route.Subdomain
 
-func (s *Server) routeHTTPHealthy(ctx context.Context, route Route) bool {
-	cmd := fmt.Sprintf(
-		"curl -fsS --max-time 3 %s >/dev/null && printf __MOB_HEALTHY__",
-		shellQuote(fmt.Sprintf("http://127.0.0.1:%d%s", route.Port, route.HealthPath)),
-	)
-	output, _ := s.runSandboxCommandOutput(ctx, route.SandboxID, cmd, 8*time.Second)
-	if strings.Contains(output, "__MOB_HEALTHY__") {
-		return true
+	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
+	if err != nil {
+		return false
 	}
-	return false
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	if route.HealthPath != "" {
+		return resp.StatusCode >= 200 && resp.StatusCode < 400
+	}
+	return resp.StatusCode < 500
 }
 
 func (s *Server) waitRouteHealthy(ctx context.Context, route Route, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		if s.routeHealthy(ctx, route) {
+		tunnel, err := s.ensureRouteTunnel(ctx, route)
+		if err == nil && s.routeHealthy(ctx, route, tunnel) {
 			return nil
 		}
 		if time.Now().After(deadline) {
