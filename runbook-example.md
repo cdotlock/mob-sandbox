@@ -1,131 +1,114 @@
-# MoonShort Backend mob Sandbox Runbook Example
+# MoonShort Backend mob 沙盒部署 Runbook 示例
 
-Last updated: 2026-05-06
+最后更新：2026-05-06
 
-This is a concrete handoff and operations example for continuing work on the
-existing MoonShort backend deployment in a mob sandbox. Keep secrets out of this
-file. Do not paste `.env.production`, GitHub tokens, Claude tokens, API keys, or
-cloud provider credentials into runbooks, logs, commits, or issue comments.
+这是一份给后续 Agent 接手 MoonShort backend 现有 mob sandbox 部署时使用的交接与运维示例。不要把任何密钥写进这份文档，包括 `.env.production`、GitHub token、Claude token、API key、云厂商凭证，或者其他 bearer/token 类配置。
 
-## Current Inventory
+## 当前资源清单
 
-- Local workspace: `/Users/Clock/mob-sandbox`
-- mob CLI: `/Users/Clock/mob-sandbox/bin/mob`
-- mob config: `/Users/Clock/.config/mob/config.yaml`
-- Target sandbox: `65e43349-d0be-44ba-8147-0c987075e193`
-- Target project path: `/home/daytona/moonshort-backend`
-- Stable public route: `http://moonshort-backend.47.254.93.15.sslip.io:9876`
-- User frontend entry: `http://moonshort-backend.47.254.93.15.sslip.io:9876/web/login`
-- Admin frontend entry: `http://moonshort-backend.47.254.93.15.sslip.io:9876/web/admin/login`
-- Old FastAPI sandbox, do not delete: `ca4cfdc5-a605-40be-ac1a-dc0df4fbe9f8`
-- Old FastAPI route, do not overwrite: `http://moonshort.47.254.93.15.sslip.io:9876`
+- 本地工作目录：`/Users/Clock/mob-sandbox`
+- mob CLI：`/Users/Clock/mob-sandbox/bin/mob`
+- mob 配置：`/Users/Clock/.config/mob/config.yaml`
+- 当前目标 sandbox：`65e43349-d0be-44ba-8147-0c987075e193`
+- 目标项目路径：`/home/daytona/moonshort-backend`
+- 稳定公网入口：`http://moonshort-backend.47.254.93.15.sslip.io:9876`
+- 用户前端入口：`http://moonshort-backend.47.254.93.15.sslip.io:9876/web/login`
+- Admin 前端入口：`http://moonshort-backend.47.254.93.15.sslip.io:9876/web/admin/login`
+- 旧 FastAPI sandbox，不要删除：`ca4cfdc5-a605-40be-ac1a-dc0df4fbe9f8`
+- 旧 FastAPI 入口，不要覆盖：`http://moonshort.47.254.93.15.sslip.io:9876`
 
-The MoonShort backend deployment is a Docker Compose production stack inside the
-target sandbox. The stable route proxies to sandbox port 80, where the stack's
-nginx service serves both `/api/*` and the bundled frontend under `/web/*`.
+MoonShort backend 当前部署在目标 sandbox 内，是一套 Docker Compose production stack。稳定公网入口会代理到 sandbox 的 80 端口，stack 里的 nginx 同时服务 `/api/*` 和项目自带的 `/web/*` 前端。
 
-## Hard Rules
+## 硬性规则
 
-- Use the existing target sandbox. Do not create a new sandbox unless the user
-  explicitly asks for one.
-- Do not delete any sandbox. In particular, do not delete the old FastAPI
-  sandbox.
-- Do not use local SSH keys to log into the host server for normal app work.
-  Enter the sandbox through `mob ssh <sandbox-id>`.
-- Do not print `.env.production` or any secret-bearing environment file.
-- Do not run `docker system prune -a`, `docker volume prune`, or any command that
-  can remove database volumes.
-- Do not treat a no-port URL as the source of truth. In current IP mode, the
-  stable mob route includes `:9876`.
-- Before changing code, run `git status --short --branch` in the target project
-  and preserve any existing user changes.
+- 使用现有目标 sandbox。除非用户明确要求，不要新建 sandbox。
+- 不要删除任何 sandbox，尤其不要删除旧 FastAPI sandbox。
+- 常规应用操作不要用本机 SSH key 登录宿主机；应该通过 `mob ssh <sandbox-id>` 进入 sandbox。
+- 不要打印 `.env.production`，也不要打印任何带密钥的环境文件。
+- 不要运行 `docker system prune -a`、`docker volume prune`，也不要运行任何可能删除数据库 volume 的命令。
+- 不要把不带端口的 URL 当成事实入口。当前 IP 模式下，稳定 mob 入口包含 `:9876`。
+- 改代码前，先在目标项目里执行 `git status --short --branch`，确认并保留已有用户改动。
 
-## Expanded Handoff Prompt For Another Agent
+## 给后续 Agent 的扩展交接 Prompt
 
-Use this prompt when asking another agent to continue debugging or fixing the
-MoonShort backend deployment. Fill in the current symptom and reproduction steps
-before sending it.
+需要让其他 Agent 接着排查或修复 MoonShort backend 时，可以直接把下面这段发给它。发送前，把当前症状和复现步骤补到对应位置。
 
 ```text
-You need to connect to and operate the existing mob sandbox. Do not create a new
-sandbox, do not delete any sandbox, and do not delete Docker volumes.
+你需要连接并操作现有 mob sandbox。不要新建 sandbox，不要删除任何 sandbox，也不要删除 Docker volume。
 
-Goal:
-- Continue debugging/fixing: <specific bug or deployment task>.
-- First produce a short situation report before editing code.
-- If code changes are needed, keep them scoped, commit them to a branch, and push
-  the branch. Do not push directly to main unless explicitly instructed.
+目标：
+- 继续排查/修复：<具体 bug 或部署任务>。
+- 动手改代码前，先输出一份简短现状报告。
+- 如果确实需要改代码，改动要保持小范围，提交到一个分支并 push。除非用户明确要求，不要直接 push 到 main。
 
-Local machine:
-- Workdir: /Users/Clock/mob-sandbox
-- mob CLI: /Users/Clock/mob-sandbox/bin/mob
-- mob config: /Users/Clock/.config/mob/config.yaml
+本地机器：
+- 工作目录：/Users/Clock/mob-sandbox
+- mob CLI：/Users/Clock/mob-sandbox/bin/mob
+- mob 配置：/Users/Clock/.config/mob/config.yaml
 
-Target sandbox:
-- Sandbox id: 65e43349-d0be-44ba-8147-0c987075e193
-- Project path: /home/daytona/moonshort-backend
-- Public route: http://moonshort-backend.47.254.93.15.sslip.io:9876
-- Frontend: http://moonshort-backend.47.254.93.15.sslip.io:9876/web/login
-- Admin: http://moonshort-backend.47.254.93.15.sslip.io:9876/web/admin/login
+目标 sandbox：
+- Sandbox id：65e43349-d0be-44ba-8147-0c987075e193
+- 项目路径：/home/daytona/moonshort-backend
+- 公网入口：http://moonshort-backend.47.254.93.15.sslip.io:9876
+- 前端入口：http://moonshort-backend.47.254.93.15.sslip.io:9876/web/login
+- Admin 入口：http://moonshort-backend.47.254.93.15.sslip.io:9876/web/admin/login
 
-Old FastAPI sandbox:
-- Sandbox id: ca4cfdc5-a605-40be-ac1a-dc0df4fbe9f8
-- Route: http://moonshort.47.254.93.15.sslip.io:9876
-- Do not delete it and do not overwrite its route.
+旧 FastAPI sandbox：
+- Sandbox id：ca4cfdc5-a605-40be-ac1a-dc0df4fbe9f8
+- 入口：http://moonshort.47.254.93.15.sslip.io:9876
+- 不要删除它，也不要覆盖它的 route。
 
-Enter the sandbox:
+进入 sandbox：
 cd /Users/Clock/mob-sandbox
 ./bin/mob ssh 65e43349-d0be-44ba-8147-0c987075e193
 cd /home/daytona/moonshort-backend
 
-Current stack:
+当前 stack：
 - Docker Compose prod stack
-- Compose file: docker-compose.prod.yml
-- Env file: .env.production
-- Public proxy path: /api/* and /web/*
-- Stable mob route uses port :9876 in IP mode.
+- Compose 文件：docker-compose.prod.yml
+- Env 文件：.env.production
+- 公网代理路径：/api/* 和 /web/*
+- 当前 mob 是 IP 模式，稳定入口必须带 :9876。
 
-Safety:
-- Do not print .env.production.
-- Do not print tokens, API keys, or bearer values.
-- Do not run docker system prune -a.
-- Do not run docker volume prune.
-- Do not assume the no-port hostname is correct. Use the :9876 public URL.
-- Do not use local SSH keys to log into the host; operate through mob ssh.
+安全要求：
+- 不要打印 .env.production。
+- 不要打印 token、API key、bearer value。
+- 不要运行 docker system prune -a。
+- 不要运行 docker volume prune。
+- 不要假设不带端口的 hostname 是正确入口；使用带 :9876 的公网 URL。
+- 不要用本机 SSH key 登录宿主机；通过 mob ssh 进入 sandbox 操作。
 
-Initial report checklist:
-1. Run: git status --short --branch
-2. Run: git log --oneline -5
-3. Run: sudo docker compose -f docker-compose.prod.yml --env-file .env.production ps
-4. Run: curl -s http://127.0.0.1/api/health
-5. Run from local or inside sandbox if network allows:
+初始现状报告清单：
+1. 运行：git status --short --branch
+2. 运行：git log --oneline -5
+3. 运行：sudo docker compose -f docker-compose.prod.yml --env-file .env.production ps
+4. 运行：curl -s http://127.0.0.1/api/health
+5. 从本机或 sandbox 内网络可达处运行：
    curl -s http://moonshort-backend.47.254.93.15.sslip.io:9876/api/health
-6. Check logs:
+6. 检查日志：
    sudo docker logs --tail=100 moonshort-backend-app-1
    sudo docker logs --tail=100 moonshort-backend-worker-1
    sudo docker logs --tail=100 moonshort-backend-dream-agent-1
    sudo docker logs --tail=100 moonshort-backend-nginx-1
-7. Check DB connectivity:
+7. 检查 DB 连通性：
    sudo docker exec moonshort-backend-db-1 psql -U postgres -d noval_demo -c 'select 1;'
 
-For dream/admin bugs:
-- Reproduce with the public :9876 URL, not the no-port URL.
-- Capture the exact request path, status code, response body prefix, and relevant
-  app/worker/dream-agent logs.
-- Inspect DB schema before assuming table names:
+排查 dream/admin 相关 bug 时：
+- 用带 :9876 的公网 URL 复现，不要用不带端口的 URL。
+- 记录精确请求路径、状态码、response body 前缀，以及相关 app/worker/dream-agent 日志。
+- 查询 DB 前先看 schema，不要凭记忆猜表名：
   sudo docker exec -it moonshort-backend-db-1 psql -U postgres -d noval_demo
   \dt
-- If querying jobs, first identify the actual table and columns, then list recent
-  jobs by created/updated time.
+- 如果要查 job，先确认真实表名和字段，再按 created/updated 时间列最近的任务。
 
-Remote Claude Code:
-- The sandbox has Claude Code installed. Run it only inside the sandbox.
-- Use the operator-provided ANTHROPIC_* and CLAUDE_CODE_* environment variables.
-- Do not write those values into files or commits.
-- Start it with:
+远端 Claude Code：
+- sandbox 内已经安装 Claude Code，只能在 sandbox 内运行。
+- 使用 operator 提供的 ANTHROPIC_* 和 CLAUDE_CODE_* 环境变量。
+- 不要把这些值写进文件或 commit。
+- 启动命令：
   claude --dangerously-skip-permissions
 
-When deploying a user fix from main:
+部署用户已经合入 main 的修复时：
 cd /home/daytona/moonshort-backend
 git fetch origin
 git checkout main
@@ -135,51 +118,48 @@ sudo docker compose -f docker-compose.prod.yml --env-file .env.production up -d
 curl -s http://127.0.0.1/api/health
 curl -s http://moonshort-backend.47.254.93.15.sslip.io:9876/api/health
 
-If the build fails or services stop:
-- Check disk first: df -h and sudo docker system df
-- Safe cleanup options are limited to dangling/unused build cache, for example:
+如果 build 失败或服务停止：
+- 先检查磁盘：df -h 和 sudo docker system df
+- 只做保守清理，例如 dangling image/build cache：
   sudo docker image prune -f
   sudo docker builder prune -f
-- Do not remove volumes.
+- 不要删除 volume。
 
-Expected final output:
-- Current status of the public route.
-- Current git branch and commit deployed.
-- Whether DB/Redis/queue are healthy.
-- Whether dream-agent is running and why any job failed.
-- Exact files changed, branch pushed, and validation commands run.
+期望最终输出：
+- 当前公网入口状态。
+- 当前部署的 git branch 和 commit。
+- DB/Redis/queue 是否健康。
+- dream-agent 是否运行；如果 job 失败，说明失败原因。
+- 改了哪些文件，push 到哪个分支，跑了哪些验证命令。
 ```
 
-## Connect To The Target Sandbox
+## 连接目标 Sandbox
 
-From the local workspace:
+从本地工作目录进入目标 sandbox：
 
 ```bash
 cd /Users/Clock/mob-sandbox
 ./bin/mob ssh 65e43349-d0be-44ba-8147-0c987075e193
 ```
 
-Then inside the sandbox:
+进入 sandbox 后：
 
 ```bash
 cd /home/daytona/moonshort-backend
 git status --short --branch
 ```
 
-If you need remote Claude Code, export the operator-provided Claude environment
-variables in the sandbox shell, then run:
+如果需要运行远端 Claude Code，在 sandbox shell 里 export operator 提供的 Claude 环境变量，然后运行：
 
 ```bash
 claude --dangerously-skip-permissions
 ```
 
-Do not store the Claude auth token in this repository or in the product
-repository.
+不要把 Claude auth token 存进这个仓库，也不要存进业务项目仓库。
 
-## Deploy Or Redeploy The Product
+## 部署或重新部署业务项目
 
-Use this when the user says their fix has landed on `main` and asks you to
-deploy it:
+用户说明修复已经合入 `main` 并要求部署时，使用下面流程：
 
 ```bash
 cd /home/daytona/moonshort-backend
@@ -191,7 +171,7 @@ sudo docker compose -f docker-compose.prod.yml --env-file .env.production up -d
 curl -s http://127.0.0.1/api/health
 ```
 
-Validate from outside the sandbox through the mob route:
+然后从 sandbox 外部通过 mob 稳定入口验证：
 
 ```bash
 curl -s http://moonshort-backend.47.254.93.15.sslip.io:9876/api/health
@@ -199,18 +179,17 @@ curl -sSI http://moonshort-backend.47.254.93.15.sslip.io:9876/web/login
 curl -sSI http://moonshort-backend.47.254.93.15.sslip.io:9876/web/admin/login
 ```
 
-For a first deployment or after a database reset, run seed data once:
+首次部署或数据库重置后，才需要 seed 一次：
 
 ```bash
 sudo docker compose -f docker-compose.prod.yml --env-file .env.production exec app pnpm seed:all
 ```
 
-Do not rerun seed blindly against production data. Check the app's seed behavior
-or ask the user when data preservation matters.
+不要在已有生产数据上盲目重复 seed。涉及数据保留时，先确认项目的 seed 行为，或者直接问用户。
 
-## Docker And Health Checks
+## Docker 与健康检查
 
-Inside the sandbox:
+在 sandbox 内执行：
 
 ```bash
 cd /home/daytona/moonshort-backend
@@ -222,48 +201,40 @@ sudo docker logs --tail=100 moonshort-backend-dream-agent-1
 sudo docker logs --tail=100 moonshort-backend-nginx-1
 ```
 
-DB smoke test:
+DB smoke test：
 
 ```bash
 sudo docker exec moonshort-backend-db-1 psql -U postgres -d noval_demo -c 'select 1;'
 ```
 
-If the public URL returns `502`, check in this order:
+如果公网 URL 返回 `502`，按这个顺序查：
 
-1. Disk space: `df -h`
-2. Docker usage: `sudo docker system df`
-3. Compose service status: `sudo docker compose -f docker-compose.prod.yml --env-file .env.production ps`
-4. Internal health: `curl -s http://127.0.0.1/api/health`
-5. Public health: `curl -s http://moonshort-backend.47.254.93.15.sslip.io:9876/api/health`
-6. App, nginx, worker, and dream-agent logs
+1. 磁盘空间：`df -h`
+2. Docker 占用：`sudo docker system df`
+3. Compose 服务状态：`sudo docker compose -f docker-compose.prod.yml --env-file .env.production ps`
+4. sandbox 内部健康检查：`curl -s http://127.0.0.1/api/health`
+5. 公网健康检查：`curl -s http://moonshort-backend.47.254.93.15.sslip.io:9876/api/health`
+6. app、nginx、worker、dream-agent 日志
 
-The previous long outage was caused by the sandbox disk filling up. Rebuilds can
-fail or containers can stop when Docker cannot write layers/logs. Increase disk
-or prune only safe cache/dangling images; never remove volumes unless the user
-explicitly approves data loss.
+之前长时间不可用的根因是 sandbox 磁盘打满。Docker 无法写 layer 或日志时，rebuild 会失败，容器也可能停止。遇到这种情况要先扩容或只清理安全的 cache/dangling image；除非用户明确批准数据丢失，不要删除 volume。
 
-## Public Route Notes
+## 公网 Route 注意事项
 
-Current mob server is in IP mode. In IP mode the stable route format is:
+当前 mob server 是 IP 模式。IP 模式的稳定入口格式是：
 
 ```text
 http://<route-name>.<server-ip>.sslip.io:<control-port>
 ```
 
-For this deployment that is:
+这次部署对应：
 
 ```text
 http://moonshort-backend.47.254.93.15.sslip.io:9876
 ```
 
-The no-port hostname is not the authoritative route for this deployment. During
-this deployment it appeared to be served by a separate host-level nginx on port
-80, with different behavior from the mob route. Fixing that requires host-level
-proxy access or operator action, not changes inside the sandbox. Use the `:9876`
-URL for debugging and user handoff unless host port 80 has been explicitly
-updated.
+不带端口的 hostname 不是这次部署的权威入口。排查时发现，不带端口的 hostname 由宿主机 80 端口上的另一套 host-level nginx 提供服务，行为和 mob route 不一致。修它需要宿主机级别的反向代理权限或 operator 介入，不是 sandbox 内部改代码能解决的。除非宿主机 80 端口配置已经明确更新，否则调试和交付都使用带 `:9876` 的 URL。
 
-To list registered mob routes without printing the API key:
+列出已注册 mob routes 时，不要打印 API key：
 
 ```bash
 cd /Users/Clock/mob-sandbox
@@ -274,8 +245,7 @@ curl --noproxy '*' -sS -H "Authorization: Bearer ${API_KEY}" \
 unset API_KEY
 ```
 
-If the route needs to be recreated, prefer `mob expose` and keep the health path
-and start command attached:
+如果需要重建 route，优先用 `mob expose`，并带上 health path 和 start command：
 
 ```bash
 cd /Users/Clock/mob-sandbox
@@ -284,13 +254,11 @@ cd /Users/Clock/mob-sandbox
   --start-command 'cd /home/daytona/moonshort-backend && sudo docker compose -f docker-compose.prod.yml --env-file .env.production up -d'
 ```
 
-## Debugging Dream/Admin Issues
+## Dream/Admin 问题排查
 
-Use the public `:9876` URL for browser reproduction. The app includes its own
-frontend; do not look for a separate Cocos deployment unless the user explicitly
-changes the target.
+浏览器复现使用带 `:9876` 的公网 URL。这个项目自带前端，不要再找独立 Cocos 部署，除非用户明确改变目标。
 
-Recommended flow:
+推荐排查流程：
 
 ```bash
 cd /home/daytona/moonshort-backend
@@ -302,34 +270,30 @@ sudo docker logs --tail=200 moonshort-backend-worker-1
 sudo docker logs --tail=200 moonshort-backend-dream-agent-1
 ```
 
-For DB investigation, first inspect schema:
+DB 排查先看 schema：
 
 ```bash
 sudo docker exec -it moonshort-backend-db-1 psql -U postgres -d noval_demo
 \dt
 ```
 
-Only after confirming actual table names should you query recent dream jobs,
-events, traces, or errors. Do not assume table names from memory.
+确认真实表名后，再查询最近的 dream jobs、events、traces 或 errors。不要凭记忆假设表名。
 
-When the UI says a dream job is running but opening it returns JSON parse errors,
-capture:
+如果 UI 显示 dream job 在跑，但打开详情时报 JSON parse error，至少要记录：
 
-- Browser path and status code
-- First 200 bytes of the response body
-- App logs around the request timestamp
-- Worker logs around the job timestamp
-- Dream-agent logs around the same timestamp
-- DB row status/error for the specific job id, after confirming schema
+- 浏览器请求路径和状态码
+- response body 前 200 字节
+- 同一时间段 app 日志
+- 同一时间段 worker 日志
+- 同一时间段 dream-agent 日志
+- 确认 schema 后，对应 job id 的 DB 状态和错误字段
 
-## Local Build Cleanup
+## 本地过时构建清理
 
-The user asked to remove stale local builds, not to delete sandboxes. Safe local
-cleanup depends on where the build happened:
+用户之前要求删的是本地过时构建，不是删除 sandbox。安全清理取决于构建发生的位置：
 
-- In this repo, remove generated `bin/` or `dist/` artifacts only after checking
-  `git status`.
-- In the sandbox, use Docker cache cleanup conservatively:
+- 在这个 repo 里，只在检查 `git status` 后清理生成的 `bin/` 或 `dist/` artifact。
+- 在 sandbox 里，只做保守 Docker cache 清理：
 
 ```bash
 df -h
@@ -338,26 +302,15 @@ sudo docker image prune -f
 sudo docker builder prune -f
 ```
 
-Avoid broad cleanup commands. Database state is in Docker volumes and must be
-preserved unless the user explicitly approves a reset.
+避免使用大范围清理命令。数据库状态在 Docker volumes 里，除非用户明确允许重置，否则必须保留。
 
-## Lessons Learned
+## 这次学到的经验
 
-- A working sandbox-local health check is not enough. Always validate the public
-  mob route as well.
-- In mob IP mode, the stable URL includes `:9876`. A same-host no-port URL can be
-  a different host-level reverse proxy and can show stale or inconsistent
-  behavior.
-- `mob forward` is local only. Use `mob expose` for permanent public service
-  routes and attach a health path/start command for recovery.
-- The MoonShort project ships its own frontend under `/web/*`; there is no
-  separate frontend needed for the current deployment.
-- Disk pressure can present as `502 Bad Gateway` or stopped Docker services.
-  Check disk before repeatedly rebuilding.
-- Remote Claude Code should run inside the target sandbox through `mob ssh`; it
-  is not a reason to SSH into the host with local private keys.
-- Do not debug dream jobs from only the UI. Correlate UI status, app logs,
-  worker logs, dream-agent logs, and DB state by timestamp/job id.
-- Keep deployment, route, and bug-fix work separate in git branches. A branch
-  that documents findings is useful, but production deploy should still verify
-  the exact commit and public URL after `docker compose up -d`.
+- sandbox 内部健康检查通过还不够，必须同时验证公网 mob route。
+- mob IP 模式下稳定入口包含 `:9876`。同 host 不带端口的 URL 可能是另一套宿主机反代，可能出现陈旧或不一致行为。
+- `mob forward` 只适合本地调试。长期公网服务用 `mob expose`，并绑定 health path 和 start command。
+- MoonShort 项目自带 `/web/*` 前端；当前部署不需要单独找前端项目。
+- 磁盘打满可能表现为 `502 Bad Gateway` 或 Docker 服务停止。不要在没查磁盘的情况下反复 rebuild。
+- 远端 Claude Code 应该通过 `mob ssh` 进入目标 sandbox 后运行；这不是用本机私钥 SSH 到宿主机的理由。
+- dream job 不能只看 UI。要按时间或 job id 关联 UI 状态、app 日志、worker 日志、dream-agent 日志和 DB 状态。
+- 部署、route 修复、bug 修复要分支隔离。记录问题的文档分支有价值，但生产部署后仍要确认实际 commit 和公网 URL。
